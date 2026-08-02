@@ -14,7 +14,7 @@ const T = {
   line: "#2A2D1F", lineSoft: "#22241A",
   ink: "#EAE7DB", mute: "#9C9F8B", dim: "#63665381", dimSolid: "#636653",
   brass: "#C9A961", brassDeep: "#A8863F", brassSoft: "#C9A9611F",
-  green: "#86C08A", red: "#DC6A58",
+  green: "#86C08A", red: "#DC6A58", amber: "#D8B25C",
   mono: "'IBM Plex Mono', ui-monospace, monospace",
   serif: "'Instrument Serif', Georgia, serif",
   sans: "'Inter', ui-sans-serif, system-ui, sans-serif",
@@ -51,6 +51,17 @@ const METRICS = {
   price:        { label: "Last price", unit: "₹",         group: "B", get: s => s.price },
   fcstReturn:   { label: "AI forecast return", unit: "%", group: "K", get: s => s.fcst?.ret },
 };
+/* ── Oracle: parked ────────────────────────────────────────────────
+   The forecast service's free data feeds answer 429 from Render, so the
+   Oracle returns nothing. A criterion with no data never passes, and every
+   enabled criterion must pass for the eye to open — so leaving it switchable
+   means one click silently blocks every signal in the app.
+
+   Parked rather than removed: the tab, the explainer and the threshold
+   control all stay. Flip this to true once the feed is fixed (planned via
+   Kite / a keyed source) and everything comes back with no other edit. */
+const ORACLE_ENABLED = false;
+
 /* Provenance fields ride in the same record as the metrics; they are not metrics. */
 const FUND_NON_METRIC = new Set(["status", "source", "fetchedAt", "missing", "symbol"]);
 /* The backend catalog — not this file — decides which metrics exist, and its
@@ -107,6 +118,7 @@ const DEFAULT_CRITERIA = [
     checks: [ { metric: "volMultiple", op: "gte", value: 3 } ] },
   { id: "flow", key: "O", name: "Order flow", enabled: false, builtin: true, depthNote: true,
     checks: [ { metric: "buyerPct", op: "gte", value: 65 } ] },
+  // Off by default, and while parked it cannot be switched on at all — see ORACLE_ENABLED.
   { id: "kron", key: "K", name: "AI Forecast (Kronos)", enabled: false, builtin: true, oracleNote: true,
     checks: [ { metric: "fcstReturn", op: "gte", value: 2 } ] },
 ];
@@ -502,11 +514,21 @@ export default function Trinetra() {
   const inS = { background: T.bg, border: "1px solid " + T.line, color: T.ink, fontFamily: T.mono, fontSize: 11, borderRadius: 6, padding: "6px 8px" };
   const activeCount = criteria.filter(c => c.enabled).length;
   const kronCrit = criteria.find(c => c.id === "kron");
-  const kronEnabled = !!kronCrit?.enabled;
+  /* While parked the criterion reads as off everywhere, whatever the stored
+     state says — a stale "on" must never reach the eye and mute every signal. */
+  const kronEnabled = ORACLE_ENABLED && !!kronCrit?.enabled;
   const kronThreshold = kronCrit?.checks?.[0]?.value ?? 2;
+  const toggleKron = () => { if (ORACLE_ENABLED) upCrit("kron", x => ({ ...x, enabled: !x.enabled })); };
   // is the oracle actually feeding data? check if any stock carries a forecast
-  const oracleLive = stocks.some(s => s.fcst);
-  const oracleEngine = stocks.find(s => s.fcst)?.fcst?.engine || null;
+  const oracleLive = ORACLE_ENABLED && stocks.some(s => s.fcst);
+  const oracleEngine = ORACLE_ENABLED ? (stocks.find(s => s.fcst)?.fcst?.engine || null) : null;
+
+  /* Belt and braces: the toggle is the only way in, but if the criterion ever
+     arrives enabled (restored state, a synced backend config), park it off
+     rather than let a data-less gate quietly close the eye. */
+  useEffect(() => {
+    if (!ORACLE_ENABLED && kronCrit?.enabled) upCrit("kron", x => ({ ...x, enabled: false }));
+  }, [kronCrit?.enabled]); // eslint-disable-line
 
   /* ── fundamentals matrix ───────────────────────────────────────────
      Columns come from the data, not from a list in this file: the named
@@ -655,7 +677,9 @@ export default function Trinetra() {
             Alerts {(tg.on || notifOn) && <span style={{ color: T.green }}>●</span>}
           </button>
           <button onClick={() => setPanel("oracle")} style={chip(kronEnabled)}>
-            <span style={{ fontSize: 12 }}>◉</span> Oracle {kronEnabled && <span style={{ color: T.green }}>●</span>}
+            <span style={{ fontSize: 12 }}>◉</span> Oracle
+            {kronEnabled && <span style={{ color: T.green }}>●</span>}
+            {!ORACLE_ENABLED && <span title="Forecasts paused" style={{ color: T.amber, fontFamily: T.mono, fontSize: 9 }}>⏸</span>}
           </button>
           {/* Fundamentals — the whole scraped matrix, and where fundamental
               filters get built. The count is checks on the F criterion. */}
@@ -794,7 +818,9 @@ export default function Trinetra() {
                   ? <div style={{ fontSize: 10.5, color: T.dimSolid, marginTop: 7 }}>
                       {s.fcst.horizon}-day path: {s.fcst.path?.map(p => "₹" + fmtIN(p)).join(" → ")} · engine: <span style={{ color: s.fcst.engine === "naive" ? T.red : T.brass }}>{s.fcst.engine}</span>. Probabilistic forecast, not a promise.
                     </div>
-                  : <div style={{ fontSize: 10.5, color: T.red, marginTop: 7 }}>Needs the Oracle service (set ORACLE_URL on the backend). See the Kronos README in the package.</div>)}
+                  : ORACLE_ENABLED
+                    ? <div style={{ fontSize: 10.5, color: T.red, marginTop: 7 }}>Needs the Oracle service (set ORACLE_URL on the backend). See the Kronos README in the package.</div>
+                    : <div style={{ fontSize: 10.5, color: T.amber, marginTop: 7 }}>⏸ Forecasts paused — the free data source is rate-limited from the server. This criterion is off and is not counted.</div>)}
               </div>
             ))}
           </div>
@@ -861,7 +887,9 @@ export default function Trinetra() {
             </div>
           ))}
           <button onClick={() => setPanel("oracle")} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 13px", borderRadius: 10, border: "1px solid " + T.line, background: T.card, textAlign: "left" }}>
-            <span style={{ fontSize: 12.5, color: T.mute }}><span style={{ color: T.brass }}>◉</span> AI Forecast (Kronos) lives in the Oracle tab {kronEnabled && <span style={{ color: T.green }}>· on</span>}</span>
+            <span style={{ fontSize: 12.5, color: T.mute }}><span style={{ color: T.brass }}>◉</span> AI Forecast (Kronos) lives in the Oracle tab
+              {kronEnabled && <span style={{ color: T.green }}> · on</span>}
+              {!ORACLE_ENABLED && <span style={{ color: T.amber }}> · paused</span>}</span>
             <span style={{ color: T.dimSolid, fontSize: 13 }}>→</span>
           </button>
           <button onClick={addCriterion} style={{ padding: 11, borderRadius: 9, border: "1px dashed " + T.brass + "55", background: "none", color: T.brass, fontSize: 12.5 }}>+ New criterion</button>
@@ -1028,28 +1056,65 @@ export default function Trinetra() {
           </div>
         </div>
 
-        {/* master toggle */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: kronEnabled ? T.brassSoft : T.card, border: "1px solid " + (kronEnabled ? T.brass + "66" : T.line), borderRadius: 11, padding: "13px 15px", marginBottom: 14 }}>
+        {/* master toggle — inert while parked, and it says so rather than
+            looking like a switch that simply refuses to move */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+          background: kronEnabled ? T.brassSoft : T.card,
+          border: "1px solid " + (kronEnabled ? T.brass + "66" : ORACLE_ENABLED ? T.line : T.amber + "44"),
+          borderRadius: 11, padding: "13px 15px", marginBottom: ORACLE_ENABLED ? 14 : 10 }}>
           <div>
-            <div style={{ fontSize: 13.5, fontWeight: 600, color: kronEnabled ? T.brass : T.ink }}>AI Forecast criterion</div>
-            <div style={{ fontSize: 11, color: T.mute, marginTop: 2 }}>{kronEnabled ? "Active — factored into every signal" : "Off — your other criteria run untouched"}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <span style={{ fontSize: 13.5, fontWeight: 600, color: kronEnabled ? T.brass : ORACLE_ENABLED ? T.ink : T.mute }}>AI Forecast criterion</span>
+              {!ORACLE_ENABLED && (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: T.mono, fontSize: 8.5, letterSpacing: 1,
+                  color: T.amber, border: "1px solid " + T.amber + "55", borderRadius: 4, padding: "2px 5px" }}>
+                  ⏸ PAUSED
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: T.mute, marginTop: 3, lineHeight: 1.5 }}>
+              {!ORACLE_ENABLED
+                ? "Forecasts paused — the free data source is rate-limited from the server. Returns when live market data (Kite) is connected."
+                : kronEnabled ? "Active — factored into every signal" : "Off — your other criteria run untouched"}
+            </div>
           </div>
-          <button onClick={() => { upCrit("kron", x => ({ ...x, enabled: !x.enabled })); }}
-            style={{ width: 52, height: 30, borderRadius: 99, border: "1px solid " + (kronEnabled ? T.brass : T.line), background: kronEnabled ? T.brass : "transparent", position: "relative", transition: "all .3s", cursor: "pointer", flexShrink: 0 }}>
-            <span style={{ position: "absolute", top: 3, left: kronEnabled ? 25 : 3, width: 22, height: 22, borderRadius: 99, background: kronEnabled ? "#141206" : T.dimSolid, transition: "left .25s cubic-bezier(.2,.8,.2,1)" }} />
+          <button onClick={toggleKron} disabled={!ORACLE_ENABLED}
+            aria-disabled={!ORACLE_ENABLED}
+            title={ORACLE_ENABLED ? undefined : "Paused while the forecast feed is rate-limited — it cannot be switched on"}
+            style={{ width: 52, height: 30, borderRadius: 99,
+              border: "1px solid " + (kronEnabled ? T.brass : T.line),
+              background: kronEnabled ? T.brass : "transparent", position: "relative",
+              transition: "all .3s", cursor: ORACLE_ENABLED ? "pointer" : "not-allowed",
+              opacity: ORACLE_ENABLED ? 1 : .5, flexShrink: 0 }}>
+            <span style={{ position: "absolute", top: 3, left: kronEnabled ? 25 : 3, width: 22, height: 22, borderRadius: 99,
+              background: kronEnabled ? "#141206" : T.dimSolid, transition: "left .25s cubic-bezier(.2,.8,.2,1)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 9, color: T.bg }}>
+              {ORACLE_ENABLED ? "" : "🔒"}
+            </span>
           </button>
         </div>
+
+        {!ORACLE_ENABLED && (
+          <div style={{ fontSize: 11, color: T.dimSolid, lineHeight: 1.55, marginBottom: 14 }}>
+            Deliberately parked, not broken. A criterion with no data can never pass, and the eye opens only when
+            every enabled criterion does — so leaving this switchable would let one click silence every signal.
+            Everything below stays accurate for when it returns.
+          </div>
+        )}
 
         {/* status */}
         <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
           <div style={{ flex: 1, background: T.card, border: "1px solid " + T.line, borderRadius: 9, padding: "10px 12px" }}>
             <div style={{ fontFamily: T.mono, fontSize: 9, color: T.dimSolid, letterSpacing: 1 }}>ORACLE FEED</div>
-            <div style={{ fontSize: 12.5, marginTop: 3, color: oracleLive ? T.green : T.dimSolid }}>{oracleLive ? "● receiving" : "○ not connected"}</div>
+            <div style={{ fontSize: 12.5, marginTop: 3, color: !ORACLE_ENABLED ? T.amber : oracleLive ? T.green : T.dimSolid }}>
+              {!ORACLE_ENABLED ? "⏸ paused" : oracleLive ? "● receiving" : "○ not connected"}
+            </div>
           </div>
           <div style={{ flex: 1, background: T.card, border: "1px solid " + T.line, borderRadius: 9, padding: "10px 12px" }}>
             <div style={{ fontFamily: T.mono, fontSize: 9, color: T.dimSolid, letterSpacing: 1 }}>ENGINE</div>
-            <div style={{ fontSize: 12.5, marginTop: 3, color: oracleEngine === "kronos-mini" ? T.brass : oracleEngine === "naive" ? T.red : T.dimSolid }}>
-              {oracleEngine === "kronos-mini" ? "Kronos" : oracleEngine === "naive" ? "naive (fallback)" : "—"}
+            <div style={{ fontSize: 12.5, marginTop: 3, color: !ORACLE_ENABLED ? T.amber : oracleEngine === "kronos-mini" ? T.brass : oracleEngine === "naive" ? T.red : T.dimSolid }}>
+              {!ORACLE_ENABLED ? "⏸ not polled" : oracleEngine === "kronos-mini" ? "Kronos" : oracleEngine === "naive" ? "naive (fallback)" : "—"}
             </div>
           </div>
         </div>
@@ -1079,8 +1144,10 @@ export default function Trinetra() {
           </p>
         </div>
 
-        {/* threshold control */}
-        <SectionMini>Tune the threshold</SectionMini>
+        {/* threshold control — still editable while parked: it sets a value,
+            it does not switch anything on, and it is what the criterion will
+            use the day the feed comes back */}
+        <SectionMini>Tune the threshold{!ORACLE_ENABLED && <span style={{ color: T.dimSolid }}> · saved for when it returns</span>}</SectionMini>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: T.card, border: "1px solid " + T.line, borderRadius: 10, padding: "11px 14px", marginBottom: 14 }}>
           <span style={{ fontSize: 12.5, color: T.mute }}>Min forecast return over 3 days</span>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1096,6 +1163,9 @@ export default function Trinetra() {
         <SectionMini>Wiring the Oracle</SectionMini>
         <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.7, marginBottom: 10 }}>
           The Oracle is a separate free service. Once deployed, set <span style={{ fontFamily: T.mono, color: T.brass }}>ORACLE_URL</span> on your backend and it auto-feeds forecasts here — no URL to paste in the app. Steps 1–3 of the deploy guide.
+          {!ORACLE_ENABLED && <> <span style={{ color: T.amber }}>Deploying it will not un-pause this tab</span> — the block is the price feed the
+            forecaster reads, which answers 429 to Render&apos;s IP. Flip <span style={{ fontFamily: T.mono, color: T.brass }}>ORACLE_ENABLED</span> in
+            components/Trinetra.jsx once a keyed feed (Kite) is wired.</>}
         </div>
         {mode === "live"
           ? <button onClick={pushConfig} style={{ ...btn(true), width: "100%", padding: 11 }}>Sync criteria to backend →</button>

@@ -18,6 +18,19 @@ That's it. The app opens like any website — on your phone or laptop — and
 **auto-connects to your backend on load** (no pasting URLs). Add the site to
 your phone's home screen for an app-like icon.
 
+## Oracle: parked
+
+The AI Forecast criterion is **paused**. The forecast service reads free price
+feeds that answer HTTP 429 to Render's IP, so it returns nothing — and a criterion
+with no data can never pass, while the eye opens only when every *enabled*
+criterion does. Left switchable, one click would silence every signal in the app.
+
+So the tab, the explainer and the threshold control all stay; only the switch is
+inert. `ORACLE_ENABLED` at the top of `components/Trinetra.jsx` is the whole gate:
+flip it to `true` once a keyed feed (Kite) is wired and the toggle, the status
+tiles and the criterion come back with no other edit. Deploying the Oracle service
+alone will not un-pause it — the blocked link is the price feed it reads.
+
 ## Fundamentals tab
 
 The **Fundamentals** chip in the action strip opens the whole scraped matrix:
