@@ -18,6 +18,39 @@ That's it. The app opens like any website — on your phone or laptop — and
 **auto-connects to your backend on load** (no pasting URLs). Add the site to
 your phone's home screen for an app-like icon.
 
+## Fundamentals tab
+
+The **Fundamentals** chip in the action strip opens the whole scraped matrix:
+one row per watchlist symbol, one column per metric, plus a provenance column
+(`fetched` / `partial` / `seed` / `none`, or `demo`). Cells are judged against
+the Fundamentals criterion — green passes, red fails, grey means no threshold is
+set on that metric, dim means the scrape could not establish the value. Click any
+column header to sort; missing values always sort last, because absent is not low.
+
+Underneath is **Build a fundamental filter**: pick a metric, `≥` or `≤`, a value,
+and it becomes a check on the Fundamentals criterion — the same gate the eye opens
+on, editable from the Criteria panel and pushed to the backend by **Sync criteria
+to backend**. That is how you add your own `Piotroski ≥ 7` or `ROCE ≥ 20%` rules.
+**Refresh all fundamentals** posts to `/fundamentals/refresh-all`; it is paced at
+roughly one symbol per second server-side, so a large universe takes a while.
+
+In demo mode the matrix shows simulated values and the refresh/sync controls are
+disabled — the numbers are not real company data and are labelled `demo`.
+
+### New backend metrics appear here automatically
+
+`trinetra-backend/fundamentals.config.js` is the single source of truth for which
+metrics exist. Add an entry there and the backend scrapes it, includes it in
+`GET /fundamentals`, and accepts it as a criteria check. On this side **no release
+is needed**: the tab builds its columns from the keys actually present in the
+payload, so a new metric shows up as a column (marked `＋`), sorts, gets a
+threshold in the filter builder, and is selectable in the Criteria panel — with a
+humanized label derived from the key and a `%` unit inferred when the name implies
+one. Adding the key to `FUND_METRICS` in `components/Trinetra.jsx` is optional
+polish: it supplies the proper name, unit and short column header.
+
+The reverse also holds: a metric the backend stops sending simply stops appearing.
+
 ## Pravesh (IPO intelligence tab)
 
 **Pravesh** is the doorway chip in the action strip, next to Criteria / Alerts /

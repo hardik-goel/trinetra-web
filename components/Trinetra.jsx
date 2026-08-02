@@ -847,7 +847,10 @@ export default function Trinetra() {
               {c.checks.map((ch, i) => (
                 <div key={i} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
                   <select value={ch.metric} onChange={e => upCrit(c.id, x => ({ ...x, checks: x.checks.map((y, j) => j === i ? { ...y, metric: e.target.value } : y) }))} style={{ ...inS, flex: 1 }}>
-                    {Object.entries(METRICS).map(([id, m]) => <option key={id} value={id}>{m.label}</option>)}
+                    {/* fundColumns carries metrics the backend has started sending that
+                        this build does not name, so they are selectable here too */}
+                    {[...new Set([...Object.keys(METRICS), ...fundColumns])].map(id =>
+                      <option key={id} value={id}>{metricMeta(id).label}</option>)}
                   </select>
                   <select value={ch.op} onChange={e => upCrit(c.id, x => ({ ...x, checks: x.checks.map((y, j) => j === i ? { ...y, op: e.target.value } : y) }))} style={inS}><option value="gte">≥</option><option value="lte">≤</option></select>
                   <input type="number" step="any" value={ch.value} onChange={e => upCrit(c.id, x => ({ ...x, checks: x.checks.map((y, j) => j === i ? { ...y, value: +e.target.value } : y) }))} style={{ ...inS, width: 62, textAlign: "right" }} />
