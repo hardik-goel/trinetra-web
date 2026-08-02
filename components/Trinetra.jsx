@@ -1,5 +1,6 @@
 "use client";
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import PraveshPanel, { DoorGlyph } from "./PraveshPanel";
 
 /* ================================================================
    TRINETRA — the eye opens when everything aligns
@@ -42,16 +43,20 @@ const fmtVal = (id, v) => {
   return (+v).toFixed(u === "×" || u === "" ? 2 : 1) + u;
 };
 const OPS = { gte: "≥", lte: "≤" };
+/* Seed fundamentals are hand-entered and never confirmed by a scrape. They are
+   shown, but they cannot tick a box — mirrors lib/engine.js on the backend. */
+const isUnverified = (s, metric) => METRICS[metric]?.group === "F" && s.fund?.status === "seed";
 const checkOk = (s, c) => {
   const v = METRICS[c.metric]?.get(s);
   if (v == null || Number.isNaN(v)) return { v, ok: false, na: true };
+  if (isUnverified(s, c.metric)) return { v, ok: false, na: false, unverified: true };
   return { v, ok: c.op === "gte" ? v >= c.value : v <= c.value, na: false };
 };
 function evaluate(s, criteria) {
   const active = criteria.filter(c => c.enabled);
   const results = active.map(c => {
-    const checks = c.checks.map(ch => { const r = checkOk(s, ch); return { label: METRICS[ch.metric].label, value: fmtVal(ch.metric, r.v), req: OPS[ch.op] + " " + fmtVal(ch.metric, ch.value), ok: r.ok, na: r.na }; });
-    return { ...c, checksOut: checks, pass: checks.length > 0 && checks.every(x => x.ok), na: checks.some(x => x.na) };
+    const checks = c.checks.map(ch => { const r = checkOk(s, ch); return { label: METRICS[ch.metric].label, value: fmtVal(ch.metric, r.v), req: OPS[ch.op] + " " + fmtVal(ch.metric, ch.value), ok: r.ok, na: r.na, unverified: r.unverified }; });
+    return { ...c, checksOut: checks, pass: checks.length > 0 && checks.every(x => x.ok), na: checks.some(x => x.na), unverified: checks.some(x => x.unverified) };
   });
   return { criteria: results, count: results.filter(r => r.pass).length, total: active.length,
     locked: active.length > 0 && results.every(r => r.pass),
@@ -78,7 +83,7 @@ function makeUniverse() {
     const hist = []; let p = base * (.88 + Math.random() * .04);
     for (let i = 0; i < 40; i++) { p *= 1 + (Math.random() - .485) * .012; hist.push(+p.toFixed(2)); }
     const avgVol = Math.round(2e5 + Math.random() * 3e6);
-    return { symbol, name, sector, scenario, fund: { roe, de, profitGrowth: pg, promoter: ph, pledged: pl },
+    return { symbol, name, sector, scenario, fund: { roe, de, profitGrowth: pg, promoter: ph, pledged: pl, status: "demo" },
       price: hist.at(-1), prevClose: hist.at(-2), high20: Math.max(...hist.slice(-20)), high52: Math.max(...hist) * (1 + Math.random() * .06),
       hist, avgVol20: avgVol, volToday: Math.round(avgVol * (.3 + Math.random() * .4)),
       bidQty: Math.round(1e4 + Math.random() * 9e4), askQty: Math.round(1e4 + Math.random() * 9e4), tickN: 0 };
@@ -93,6 +98,25 @@ function demoTick(s) {
   const bp = s.scenario === "star" ? 1.06 : s.scenario === "build" && s.tickN > 7 ? 1.035 : 1 + (Math.random() - .5) * .04;
   n.bidQty = Math.round(Math.max(5e3, s.bidQty * bp)); n.askQty = Math.round(Math.max(5e3, s.askQty * (2 - bp)));
   n.hist = [...s.hist.slice(-59), n.price]; return n;
+}
+
+/* universe editing — mirrors the backend's normalizer so the UI can
+   pre-validate, pre-dedupe and enforce the cap before any request */
+const MAX_UNIVERSE = 200;
+const UNI_KEY = "trinetra.universe";
+const SYM_RE = /^[A-Z0-9&-]+$/; // NSE symbol charset
+const HEADER_RE = /^(SYMBOL|SYMBOLS|TICKER|NAME|SCRIP|STOCK|CODE)$/; // spreadsheet header rows
+const cleanSym = s => { const v = String(s ?? "").trim().toUpperCase().replace(/^"|"$/g, ""); return SYM_RE.test(v) ? v : ""; };
+// Accepts commas, spaces, tabs, semicolons or newlines — so a pasted Excel
+// column and a comma list both parse without the user picking a format.
+function parseSymbols(text) {
+  const out = [];
+  for (const tok of String(text || "").split(/[\s,;]+/)) {
+    const s = cleanSym(tok);
+    if (!s || HEADER_RE.test(s) || out.includes(s)) continue;
+    out.push(s);
+  }
+  return out;
 }
 
 async function tgSend(token, chatId, text) {
@@ -119,6 +143,22 @@ function Spark({ hist, high20 }) {
     <polyline points={pts} fill="none" stroke={up ? T.brass : T.red} strokeWidth="1.5" strokeLinejoin="round" />
   </svg>;
 }
+/* Fundamentals provenance at a glance — a stock evaluated on incomplete data
+   should never look the same as one evaluated on complete data. */
+const FUND_STATUS = {
+  fetched:     { glyph: "●", color: T.brass, label: "complete" },
+  partial:     { glyph: "◐", color: T.mute,  label: "partial — some fields missing" },
+  unavailable: { glyph: "○", color: T.red,   label: "unavailable — scrape found nothing" },
+  seed:        { glyph: "◌", color: T.dimSolid, label: "unverified seed — never scraped" },
+};
+function FundDot({ rec, size = 10 }) {
+  const s = FUND_STATUS[rec?.status];
+  if (!s) return null;
+  const when = rec.fetchedAt ? new Date(rec.fetchedAt).toLocaleDateString("en-IN") : "";
+  return <span title={`Fundamentals ${s.label}${rec.source ? " · " + rec.source : ""}${when ? " · " + when : ""}`}
+    style={{ color: s.color, fontSize: size, fontFamily: T.mono, lineHeight: 1 }}>{s.glyph}</span>;
+}
+
 function StatusDot({ state }) {
   const c = state === "live" ? T.green : state === "demo" ? T.brass : state === "error" ? T.red : T.dimSolid;
   return <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -147,6 +187,174 @@ export default function Trinetra() {
   const [interval_, setInterval_] = useState(3);
   const alerted = useRef(new Set());
   const R = useRef({}); R.current = { tg, criteria, notifOn, mode, backendUrl };
+
+  /* ── universe management (live backend only) ── */
+  const [universe, setUniverse] = useState(null);      // server truth; null until fetched
+  const [savedUni, setSavedUni] = useState(null);      // this browser's remembered list
+  const [uni, setUni] = useState({ busy: false, err: "", msg: "" });
+  const [addSym, setAddSym] = useState("");
+  const [bulk, setBulk] = useState({ open: false, mode: "add", text: "" });
+  const [confirmClear, setConfirmClear] = useState(false);
+  const fileRef = useRef(null);
+
+  const liveBackend = mode === "live" && !!backendUrl;
+  const api = p => backendUrl.replace(/\/$/, "") + p;
+  const uniList = liveBackend && universe ? universe : stocks.map(s => s.symbol);
+  const readCache = () => { try { return JSON.parse(localStorage.getItem(UNI_KEY) || "null"); } catch { return null; } };
+  const rememberUni = list => { setSavedUni(list); try { localStorage.setItem(UNI_KEY, JSON.stringify(list)); } catch {} };
+  useEffect(() => { setSavedUni(readCache()); }, []);
+
+  /* ── fundamentals: scraped server-side, surfaced with honest status ── */
+  const [funds, setFunds] = useState({});
+  const [fundBusy, setFundBusy] = useState("");  // symbol mid-refresh, or "all"
+  const [fundMsg, setFundMsg] = useState("");
+
+  const loadFundamentals = useCallback(async url => {
+    try {
+      const res = await fetch((url || backendUrl).replace(/\/$/, "") + "/fundamentals");
+      const j = await res.json();
+      if (j && typeof j === "object" && !Array.isArray(j)) setFunds(j);
+    } catch { /* the feed panel already reports connection trouble */ }
+  }, [backendUrl]);
+
+  // Scrapes finish in the background, so poll while the panel is open.
+  useEffect(() => {
+    if (!liveBackend || panel !== "universe") return;
+    const id = setInterval(() => loadFundamentals(), 20_000);
+    return () => clearInterval(id);
+  }, [liveBackend, panel, loadFundamentals]);
+
+  const refreshFund = async symbol => {
+    setFundBusy(symbol); setFundMsg("");
+    try {
+      const res = await fetch(api("/fundamentals/refresh"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol }) });
+      const rec = await res.json();
+      if (!res.ok) throw new Error(rec.error || `HTTP ${res.status}`);
+      setFunds(f => ({ ...f, [symbol]: rec }));
+      setFundMsg(`${symbol}: ${rec.status}${rec.source ? " via " + rec.source : ""}`);
+    } catch (e) { setFundMsg(`${symbol}: refresh failed — ${e.message}`); }
+    finally { setFundBusy(""); }
+  };
+
+  const refreshAllFunds = async () => {
+    setFundBusy("all"); setFundMsg("Scraping — paced ~1s per symbol, this takes a while…");
+    try {
+      const res = await fetch(api("/fundamentals/refresh-all"), { method: "POST" });
+      const s = await res.json();
+      if (!res.ok) throw new Error(s.error || `HTTP ${res.status}`);
+      setFundMsg(`${s.refreshed} fetched · ${s.partial} partial · ${s.unavailable} unavailable`);
+      loadFundamentals();
+    } catch (e) { setFundMsg("Refresh-all failed — " + e.message); }
+    finally { setFundBusy(""); }
+  };
+
+  const loadUniverse = useCallback(async url => {
+    try {
+      const res = await fetch((url || backendUrl).replace(/\/$/, "") + "/universe");
+      const j = await res.json();
+      if (!Array.isArray(j.symbols)) return;
+      setUniverse(j.symbols);
+      if (!readCache()) rememberUni(j.symbols); // first sight becomes the baseline
+    } catch { /* the snapshot loop already surfaces connection trouble */ }
+  }, [backendUrl]);
+
+  // Every mutation goes through here: optimistic paint, then reconcile with the
+  // server's cleaned list (it may have uppercased, deduped or capped differently).
+  const uniPost = async (path, body, summarize) => {
+    setUni({ busy: true, err: "", msg: "" });
+    try {
+      const res = await fetch(api(path), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+      setUniverse(j.symbols); rememberUni(j.symbols);
+      setUni({ busy: false, err: "", msg: summarize ? summarize(j) : "" });
+      return j;
+    } catch (e) {
+      setUni({ busy: false, msg: "", err: /fetch|network/i.test(e.message)
+        ? "Backend unreachable — a sleeping free instance takes ~30s to wake. Retry."
+        : e.message });
+      // Roll the optimistic paint back to the last server-confirmed list, then
+      // re-read. Without the rollback a fully-down backend leaves a phantom
+      // edit on screen that also trips the restore banner.
+      if (savedUni) setUniverse(savedUni);
+      loadUniverse();
+      return null;
+    }
+  };
+
+  const addOne = async sym => {
+    const s = cleanSym(sym);
+    if (!s || uniList.includes(s)) return;
+    setUniverse(u => (u ? [...u, s] : u));
+    setAddSym("");
+    const ok = await uniPost("/universe/add", { symbol: s });
+    if (ok) afterAdd([s]);
+  };
+  // The scrape runs server-side after the response, so hint and re-poll.
+  const afterAdd = syms => {
+    setFundMsg(`Fetching fundamentals for ${syms.length === 1 ? syms[0] : syms.length + " symbols"}…`);
+    setTimeout(() => loadFundamentals(), 3000);
+    setTimeout(() => loadFundamentals(), 10000);
+  };
+  const removeOne = async sym => {
+    setUniverse(u => (u ? u.filter(x => x !== sym) : u));
+    await uniPost("/universe/remove", { symbol: sym });
+  };
+  const clearAll = async () => { setConfirmClear(false); setUniverse([]); await uniPost("/universe", { symbols: [] }, () => "Universe cleared."); };
+
+  const submitBulk = async (raw, source) => {
+    const parsed = parseSymbols(raw);
+    if (!parsed.length) { setUni({ busy: false, err: "Nothing recognizable in that " + source + ".", msg: "" }); return; }
+    if (bulk.mode === "remove") {
+      const present = parsed.filter(s => uniList.includes(s));
+      if (!present.length) { setUni({ busy: false, err: "None of those symbols are in the universe.", msg: "" }); return; }
+      const j = await uniPost("/universe/bulk-remove", { symbols: present }, r => `Removed ${r.removed}.`);
+      if (j) setBulk(b => ({ ...b, text: "" }));
+      return;
+    }
+    const fresh = parsed.filter(s => !uniList.includes(s));
+    const dupes = parsed.length - fresh.length;
+    const room = MAX_UNIVERSE - uniList.length;
+    const dropped = Math.max(0, fresh.length - room);
+    const send = fresh.slice(0, Math.max(0, room));
+    if (!send.length) {
+      setUni({ busy: false, msg: "", err: dropped
+        ? `Universe is full (${MAX_UNIVERSE}). Remove some symbols first — ${dropped} not added.`
+        : `All ${parsed.length} already present.` });
+      return;
+    }
+    const j = await uniPost("/universe/bulk-add", { symbols: send }, r =>
+      `Added ${r.added}, skipped ${dupes + dropped + (r.skipped || 0)}` +
+      (dropped ? ` (${dropped} over the ${MAX_UNIVERSE} cap)` : dupes ? " (already present / invalid)" : ""));
+    if (j) { setBulk(b => ({ ...b, text: "" })); afterAdd(send); }
+  };
+
+  const onFile = async e => {
+    const f = e.target.files?.[0]; if (!f) return;
+    e.target.value = ""; // let the same file be picked again after a fix
+    try {
+      const text = await f.text();
+      // CSV: take the first column of each row. TXT: every token.
+      const raw = /\.csv$/i.test(f.name) ? text.split(/\r?\n/).map(l => l.split(",")[0]).join("\n") : text;
+      setBulk(b => ({ ...b, open: true, mode: "add", text: raw }));
+      await submitBulk(raw, "file");
+    } catch { setUni({ busy: false, err: "Could not read that file.", msg: "" }); }
+  };
+
+  const exportTxt = () => {
+    const blob = new Blob([uniList.join("\n") + "\n"], { type: "text/plain" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "trinetra-universe.txt";
+    a.click(); URL.revokeObjectURL(a.href);
+  };
+  const copyUni = async () => {
+    try { await navigator.clipboard.writeText(uniList.join("\n")); setUni(u => ({ ...u, err: "", msg: `Copied ${uniList.length} symbols.` })); }
+    catch { setUni(u => ({ ...u, err: "Clipboard blocked — use Download instead.", msg: "" })); }
+  };
+  // Free-tier redeploys wipe universe.runtime.json. Offer a one-click restore
+  // rather than pushing silently — a silent push would resurrect deletions.
+  const staleServerList = liveBackend && universe && savedUni?.length &&
+    (savedUni.length !== universe.length || savedUni.some((s, i) => s !== universe[i]));
 
   const fireAlerts = useCallback(list => {
     const r = R.current;
@@ -194,7 +402,7 @@ export default function Trinetra() {
     try {
       const res = await fetch(backendUrl.replace(/\/$/, "") + "/health");
       const j = await res.json();
-      if (j.ok) { setMode("live"); setConn({ state: "live", lastSync: null, delayed: j.delayed, provider: j.provider }); return true; }
+      if (j.ok) { setMode("live"); setConn({ state: "live", lastSync: null, delayed: j.delayed, provider: j.provider }); loadUniverse(backendUrl); loadFundamentals(backendUrl); return true; }
     } catch {}
     setConn(c => ({ ...c, state: "error" })); return false;
   };
@@ -244,7 +452,7 @@ export default function Trinetra() {
   if (!onboarded) {
     return (
       <div style={{ minHeight: "100vh", background: T.bg, color: T.ink, fontFamily: T.sans, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-        <style>{css}</style>
+        <style dangerouslySetInnerHTML={{ __html: css }} />
         <div className="rise" style={{ maxWidth: 440, width: "100%", textAlign: "center" }}>
           <div style={{ width: 64, height: 64, margin: "0 auto 20px", borderRadius: 99, border: "1px solid " + T.brass + "66", display: "flex", alignItems: "center", justifyContent: "center", animation: "irisIn .8s cubic-bezier(.2,.8,.2,1)" }}>
             <div style={{ width: 26, height: 26, borderRadius: 99, background: "radial-gradient(circle at 50% 45%, " + T.brass + ", " + T.brassDeep + ")", boxShadow: "0 0 18px " + T.brass + "77" }} />
@@ -275,7 +483,7 @@ export default function Trinetra() {
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, color: T.ink, fontFamily: T.sans }}>
-      <style>{css}</style>
+      <style dangerouslySetInnerHTML={{ __html: css }} />
 
       {/* top bar */}
       <header style={{ position: "sticky", top: 0, zIndex: 20, background: T.bg + "F0", borderBottom: "1px solid " + T.line, backdropFilter: "blur(10px)" }}>
@@ -312,7 +520,12 @@ export default function Trinetra() {
           <button onClick={() => setPanel("oracle")} style={chip(kronEnabled)}>
             <span style={{ fontSize: 12 }}>◉</span> Oracle {kronEnabled && <span style={{ color: T.green }}>●</span>}
           </button>
-          <button onClick={() => setPanel("universe")} style={chip()}>Universe <span style={{ color: T.mute, fontFamily: T.mono }}>{stocks.length}</span></button>
+          <button onClick={() => setPanel("universe")} style={chip()}>Universe <span style={{ color: T.mute, fontFamily: T.mono }}>{uniList.length}</span></button>
+          {/* Pravesh — IPO intelligence from a separate engine, read-only here.
+              Opens in place: the screener keeps ticking behind the drawer. */}
+          <button onClick={() => setPanel("pravesh")} style={chip(panel === "pravesh")}>
+            <DoorGlyph size={12} color={panel === "pravesh" ? T.brass : T.mute} /> Pravesh
+          </button>
         </div>
 
         {/* signals */}
@@ -372,6 +585,7 @@ export default function Trinetra() {
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <FundDot rec={funds[s.symbol]} />
                   <span style={{ fontFamily: T.mono, fontSize: 10, color: ev.locked ? T.brass : T.dimSolid }}>{ev.count}/{ev.total}</span>
                   <Eye ev={ev} s={9} />
                 </div>
@@ -404,14 +618,34 @@ export default function Trinetra() {
               <div key={c.id} style={{ background: T.card, border: "1px solid " + (c.pass ? T.brass + "55" : T.line), borderRadius: 10, padding: "13px 15px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
                   <span style={{ fontFamily: T.mono, fontSize: 11.5, letterSpacing: 1, color: c.pass ? T.brass : T.mute }}>{c.key} · {c.name.toUpperCase()}</span>
-                  <span style={{ fontFamily: T.mono, fontSize: 10.5, color: c.pass ? T.green : c.na ? T.red : T.dimSolid }}>{c.pass ? "LOCKED" : c.na ? "NO DATA" : "OPEN"}</span>
+                  <span style={{ fontFamily: T.mono, fontSize: 10.5, color: c.pass ? T.green : c.na ? T.red : T.dimSolid }}>{c.pass ? "LOCKED" : c.na ? "NO DATA" : c.unverified ? "UNVERIFIED" : "OPEN"}</span>
                 </div>
                 {c.checksOut.map(chk => (
                   <div key={chk.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "5px 0", borderBottom: "1px dotted " + T.lineSoft }}>
                     <span style={{ color: T.mute, fontSize: 12 }}>{chk.label}</span>
-                    <span style={{ fontFamily: T.mono, fontSize: 12 }}><span>{chk.value}</span><span style={{ color: T.dimSolid, margin: "0 8px", fontSize: 10 }}>{chk.req}</span><span style={{ color: chk.ok ? T.green : T.red }}>{chk.ok ? "✓" : "✗"}</span></span>
+                    <span style={{ fontFamily: T.mono, fontSize: 12 }}><span>{chk.value}</span><span style={{ color: T.dimSolid, margin: "0 8px", fontSize: 10 }}>{chk.req}</span><span title={chk.unverified ? "Unverified — hand-entered seed value, never confirmed by a scrape" : undefined}
+                      style={{ color: chk.unverified ? T.dimSolid : chk.ok ? T.green : T.red }}>{chk.unverified ? "◌" : chk.ok ? "✓" : "✗"}</span></span>
                   </div>
                 ))}
+                {c.id === "fund" && (() => {
+                  const rec = funds[s.symbol];
+                  const st = FUND_STATUS[rec?.status];
+                  return <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 9, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.5 }}>
+                      {rec
+                        ? <><FundDot rec={rec} /> {st?.label}{rec.source ? " · " + rec.source : ""}{rec.fetchedAt ? " · " + new Date(rec.fetchedAt).toLocaleDateString("en-IN") : ""}</>
+                        : liveBackend
+                          ? <><FundDot rec={{ status: "seed" }} /> never scraped — showing the committed seed. Unverified values cannot lock this gate.</>
+                          : "Demo fundamentals (static)."}
+                    </span>
+                    {liveBackend && <button onClick={() => refreshFund(s.symbol)} disabled={!!fundBusy}
+                      style={{ ...btn(), opacity: fundBusy ? .45 : 1 }}>
+                      {fundBusy === s.symbol ? "Refreshing…" : "Refresh fundamentals"}
+                    </button>}
+                    {fundMsg.startsWith(s.symbol + ":") &&
+                      <div style={{ fontSize: 10.5, width: "100%", color: /failed/.test(fundMsg) ? T.red : T.green }}>{fundMsg}</div>}
+                  </div>;
+                })()}
                 {c.depthNote && Number.isNaN(METRICS.buyerPct.get(s)) && <div style={{ fontSize: 10.5, color: T.red, marginTop: 7 }}>Order-book depth needs Kite (live). Disabled on the free feed.</div>}
                 {c.oracleNote && (s.fcst
                   ? <div style={{ fontSize: 10.5, color: T.dimSolid, marginTop: 7 }}>
@@ -515,14 +749,125 @@ export default function Trinetra() {
       </Drawer>}
 
       {/* universe panel */}
-      {panel === "universe" && <Drawer title="Universe" onClose={() => setPanel(null)}>
-        <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginBottom: 12 }}>
-          These {stocks.length} names are the demo watchlist — recognizable, liquid mid/large-caps I picked to make the instrument realistic. <span style={{ color: T.ink }}>They are not a recommendation and not your portfolio.</span> Your real watchlist lives in the backend's <span style={{ fontFamily: T.mono, color: T.brass }}>universe.json</span> — replace these with the stocks you actually hunt.
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          {stocks.map(s => <span key={s.symbol} style={{ fontFamily: T.mono, fontSize: 11, color: T.mute, background: T.card, border: "1px solid " + T.line, borderRadius: 6, padding: "4px 8px" }}>{s.symbol}</span>)}
-        </div>
-      </Drawer>}
+      {panel === "universe" && (() => {
+        const pending = cleanSym(addSym);
+        const fundCounts = uniList.reduce((a, s) => {
+          const st = funds[s]?.status;
+          if (st === "fetched") a.fetched++; else if (st === "partial") a.partial++; else a.unavailable++;
+          return a;
+        }, { fetched: 0, partial: 0, unavailable: 0 });
+        const canAdd = liveBackend && !!pending && !uniList.includes(pending) && uniList.length < MAX_UNIVERSE && !uni.busy;
+        const lock = !liveBackend || uni.busy; // demo mode is read-only
+        return <Drawer title="Universe" onClose={() => setPanel(null)}>
+          <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginBottom: 12 }}>
+            {liveBackend
+              ? <>The {uniList.length} names your backend actually scans. Edits go straight to it — the watchlist picks them up on the next refresh, no reload. <span style={{ color: T.dimSolid }}>Cap {MAX_UNIVERSE}.</span></>
+              : <>These {uniList.length} names are the demo watchlist — recognizable, liquid mid/large-caps picked to make the instrument realistic. <span style={{ color: T.ink }}>They are not a recommendation and not your portfolio.</span> Connect a live feed to manage your own list from here.</>}
+          </div>
+
+          {staleServerList && (
+            <div style={{ background: T.brassSoft, border: "1px solid " + T.brass + "3A", borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
+              <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.5 }}>
+                The backend is scanning {universe.length} symbols; this browser remembers {savedUni.length}. A free-tier redeploy resets the list.
+              </div>
+              <button onClick={() => uniPost("/universe", { symbols: savedUni }, r => `Restored ${r.symbols.length}.`)} disabled={uni.busy}
+                style={{ ...btn(true), marginTop: 8 }}>Restore my {savedUni.length} symbols</button>
+            </div>
+          )}
+
+          {/* add one */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            <input value={addSym} onChange={e => setAddSym(e.target.value.toUpperCase())} disabled={lock}
+              onKeyDown={e => { if (e.key === "Enter" && canAdd) addOne(pending); }}
+              placeholder={liveBackend ? "Add symbol — e.g. POLYCAB" : "Connect a live feed first"}
+              style={{ ...inS, flex: 1, opacity: lock ? .5 : 1 }} />
+            <button onClick={() => addOne(pending)} disabled={!canAdd} style={{ ...btn(true), opacity: canAdd ? 1 : .35 }}>Add</button>
+          </div>
+          {liveBackend && pending && uniList.includes(pending) &&
+            <div style={{ fontSize: 10.5, color: T.dimSolid, marginTop: -4, marginBottom: 8 }}>{pending} is already in the universe.</div>}
+
+          {/* chips */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {uniList.map(sym => (
+              <span key={sym} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: T.mono, fontSize: 11, color: T.mute, background: T.card, border: "1px solid " + T.line, borderRadius: 6, padding: "4px 6px 4px 8px" }}>
+                {sym}
+                {liveBackend && <button onClick={() => removeOne(sym)} disabled={uni.busy} title={"Remove " + sym}
+                  style={{ background: "none", border: "none", color: T.dimSolid, fontSize: 11, lineHeight: 1, padding: 0, opacity: uni.busy ? .4 : 1 }}>✕</button>}
+              </span>
+            ))}
+            {!uniList.length && <span style={{ fontSize: 11.5, color: T.dimSolid }}>Empty — add symbols or bulk-paste a list below.</span>}
+          </div>
+
+          {/* status line */}
+          {(uni.err || uni.msg) && (
+            <div style={{ fontSize: 11, marginTop: 10, lineHeight: 1.5, color: uni.err ? T.red : T.green }}>{uni.err || uni.msg}</div>
+          )}
+
+          {/* fundamentals */}
+          <div style={{ marginTop: 14, borderTop: "1px solid " + T.lineSoft, paddingTop: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={refreshAllFunds} disabled={lock || !!fundBusy || !uniList.length}
+                style={{ ...btn(), opacity: lock || fundBusy || !uniList.length ? .4 : 1 }}>
+                {fundBusy === "all" ? "Refreshing…" : "Refresh all fundamentals"}
+              </button>
+              <span style={{ fontSize: 10.5, color: T.dimSolid, display: "flex", gap: 9 }}>
+                <span><FundDot rec={{ status: "fetched" }} /> {fundCounts.fetched} complete</span>
+                <span><FundDot rec={{ status: "partial" }} /> {fundCounts.partial} partial</span>
+                <span><FundDot rec={{ status: "unavailable" }} /> {fundCounts.unavailable} none</span>
+              </span>
+            </div>
+            {fundMsg && <div style={{ fontSize: 10.5, marginTop: 7, lineHeight: 1.5, color: /failed/.test(fundMsg) ? T.red : T.mute }}>{fundMsg}</div>}
+            <div style={{ fontSize: 10.5, color: T.dimSolid, marginTop: 7, lineHeight: 1.5 }}>
+              Scraped from screener.in / moneycontrol, cached — they only move quarterly. Partial means a field could not be established; it is never guessed.
+            </div>
+          </div>
+
+          {/* bulk */}
+          <div style={{ marginTop: 16, borderTop: "1px solid " + T.lineSoft, paddingTop: 14 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              <button onClick={() => setBulk(b => ({ ...b, open: !b.open, mode: "add" }))} disabled={lock} style={{ ...btn(), opacity: lock ? .4 : 1 }}>Bulk add</button>
+              <button onClick={() => setBulk(b => ({ ...b, open: true, mode: "remove" }))} disabled={lock} style={{ ...btn(), opacity: lock ? .4 : 1 }}>Remove listed</button>
+              <button onClick={() => fileRef.current?.click()} disabled={lock} style={{ ...btn(), opacity: lock ? .4 : 1 }}>Upload .csv / .txt</button>
+              <input ref={fileRef} type="file" accept=".csv,.txt,text/csv,text/plain" onChange={onFile} style={{ display: "none" }} />
+              {confirmClear
+                ? <>
+                    <button onClick={clearAll} style={{ ...pill(T.red), fontFamily: T.sans, fontSize: 11.5 }}>Confirm clear all</button>
+                    <button onClick={() => setConfirmClear(false)} style={btn()}>Cancel</button>
+                  </>
+                : <button onClick={() => setConfirmClear(true)} disabled={lock || !uniList.length} style={{ ...btn(), color: T.red, borderColor: T.red + "55", opacity: lock || !uniList.length ? .4 : 1 }}>Clear all</button>}
+            </div>
+
+            {bulk.open && liveBackend && (() => {
+              const preview = parseSymbols(bulk.text);
+              const fresh = bulk.mode === "add" ? preview.filter(s => !uniList.includes(s)) : preview.filter(s => uniList.includes(s));
+              return <div style={{ marginTop: 10 }}>
+                <textarea value={bulk.text} onChange={e => setBulk(b => ({ ...b, text: e.target.value }))} rows={4}
+                  placeholder={"Paste symbols — commas, spaces, tabs or one per line.\nPOLYCAB, KAYNES\nBEL\tHAL"}
+                  style={{ ...inS, width: "100%", resize: "vertical", lineHeight: 1.5 }} />
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                  <button onClick={() => submitBulk(bulk.text, "paste")} disabled={uni.busy || !fresh.length}
+                    style={{ ...btn(true), opacity: uni.busy || !fresh.length ? .35 : 1 }}>
+                    {bulk.mode === "add" ? "Add" : "Remove"} {fresh.length || ""}
+                  </button>
+                  <button onClick={() => setBulk({ open: false, mode: "add", text: "" })} style={btn()}>Close</button>
+                  <span style={{ fontSize: 10.5, color: T.dimSolid }}>
+                    {preview.length ? `${preview.length} parsed · ${fresh.length} ${bulk.mode === "add" ? "new" : "present"}` : "nothing parsed yet"}
+                    {bulk.mode === "add" && fresh.length > MAX_UNIVERSE - uniList.length &&
+                      <span style={{ color: T.red }}> · {fresh.length - (MAX_UNIVERSE - uniList.length)} over the cap will be dropped</span>}
+                  </span>
+                </div>
+              </div>;
+            })()}
+          </div>
+
+          {/* export */}
+          <div style={{ marginTop: 14, borderTop: "1px solid " + T.lineSoft, paddingTop: 12, display: "flex", gap: 6, alignItems: "center" }}>
+            <button onClick={copyUni} disabled={!uniList.length} style={{ ...btn(), opacity: uniList.length ? 1 : .4 }}>Copy</button>
+            <button onClick={exportTxt} disabled={!uniList.length} style={{ ...btn(), opacity: uniList.length ? 1 : .4 }}>Download .txt</button>
+            <span style={{ fontSize: 10.5, color: T.dimSolid }}>one symbol per line · files are read in your browser, never uploaded</span>
+          </div>
+        </Drawer>;
+      })()}
 
       {/* oracle panel */}
       {panel === "oracle" && <Drawer title="The Oracle" onClose={() => setPanel(null)}>
@@ -614,6 +959,18 @@ export default function Trinetra() {
           Kronos is open-source (MIT) · shiyu-coder/Kronos. Forecasts are probabilistic, not promises. Decision support, not investment advice.
         </p>
       </Drawer>}
+
+      {/* pravesh panel — mounted only while open, so the screener never pays for
+          the IPO fetch, and a bad snapshot is contained by the boundary */}
+      {panel === "pravesh" && <Drawer wide title="Pravesh" onClose={() => setPanel(null)}>
+        <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginTop: -6, marginBottom: 12 }}>
+          Live IPOs, the published views behind each one, and how often those sources have actually been right.
+          <span style={{ color: T.dimSolid }}> Read-only — the engine runs elsewhere.</span>
+        </div>
+        <PraveshBoundary>
+          <PraveshPanel />
+        </PraveshBoundary>
+      </Drawer>}
     </div>
   );
 
@@ -628,9 +985,27 @@ function SectionLabel({ children, muted }) {
 function SectionMini({ children, accent }) {
   return <div style={{ fontFamily: T.mono, fontSize: 10, letterSpacing: 1.5, color: accent || T.brass, marginBottom: 7, textTransform: "uppercase" }}>{children}</div>;
 }
-function Drawer({ title, onClose, children }) {
+/* Pravesh renders a snapshot published by a different repo. If that snapshot is
+   ever malformed enough to throw, it takes down the drawer — not the screener. */
+class PraveshBoundary extends React.Component {
+  constructor(p) { super(p); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  render() {
+    if (!this.state.err) return this.props.children;
+    return <div style={{ border: "1px solid " + T.red + "44", background: T.red + "10", borderRadius: 10, padding: "14px 16px" }}>
+      <div style={{ fontSize: 13, color: T.red, marginBottom: 4 }}>Pravesh could not render this snapshot.</div>
+      <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6 }}>
+        The screener is unaffected. Close and reopen the tab to retry — if it keeps failing, the engine's
+        data/latest.json is likely on a shape this build does not understand.
+      </div>
+      <div style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid, marginTop: 8 }}>{String(this.state.err?.message || this.state.err)}</div>
+    </div>;
+  }
+}
+
+function Drawer({ title, onClose, wide, children }) {
   return <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 40, background: "#000B", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-    <div onClick={e => e.stopPropagation()} className="rise" style={{ width: "100%", maxWidth: 480, maxHeight: "92vh", overflowY: "auto", background: T.panel, border: "1px solid " + T.line, borderRadius: "16px 16px 0 0", padding: 18 }}>
+    <div onClick={e => e.stopPropagation()} className="rise" style={{ width: "100%", maxWidth: wide ? 720 : 480, maxHeight: "92vh", overflowY: "auto", background: T.panel, border: "1px solid " + T.line, borderRadius: "16px 16px 0 0", padding: 18 }}>
       {title && <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
         <span style={{ fontFamily: T.serif, fontSize: 21 }}>{title}</span>
         <button onClick={onClose} style={{ background: "none", border: "none", color: T.dimSolid, fontSize: 12, cursor: "pointer" }}>Close ✕</button>
