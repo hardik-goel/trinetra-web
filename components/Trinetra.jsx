@@ -736,11 +736,20 @@ export default function Trinetra() {
 
   /* Sort keys are the market metrics plus every fundamental the backend sends,
      so the list can be ordered by anything the Fundamentals tab can show. */
+  /* Per-profile decision summaries ride on each snapshot row as `decisions`,
+     keyed by profile id — so ranking today's list by what actually matters costs
+     no extra request. Only offered when a single horizon is selected: a
+     confidence score means nothing averaged across four of them. */
+  const decisionOf = useCallback(s => (profileSel === "ALL" ? null : s.decisions?.[profileSel]), [profileSel]);
+
   const WL_SORTS = useMemo(() => ([
     ["criteria", "Criteria met"], ["symbol", "Symbol"], ["price", "Price"],
     ["dayChgPct", "Day change %"], ["volMultiple", "Volume ×"],
+    ...(profileSel !== "ALL"
+      ? [["confidence", "Confidence"], ["remaining", "Remaining potential"], ["rr", "Risk : reward"]]
+      : []),
     ...fundColumns.map(k => [k, metricMeta(k).label]),
-  ]), [fundColumns]);
+  ]), [fundColumns, profileSel]);
 
   /* Lock meters follow the selected profile. profileResults is computed by the
      same engine server-side, so switching horizon does not re-evaluate anything
@@ -770,8 +779,16 @@ export default function Trinetra() {
       });
     const { key, dir } = wlSort;
     const sign = dir === "asc" ? 1 : -1;
+    /* The three "no number" cases are not interchangeable and must not collapse
+       into one bucket: noEstimate is by design (long term), insufficientHistory
+       is too few analogs, and 0-with-exhausted is a real range that is spent —
+       which sorts as the low value it is, not as missing. null means no view,
+       never no upside, so it sorts last in both directions. */
     const valueOf = ({ s, ev }) =>
-      key === "criteria" ? ev.count
+      key === "confidence" ? decisionOf(s)?.confidence?.score ?? null
+      : key === "remaining" ? (decisionOf(s)?.noEstimate || decisionOf(s)?.insufficientHistory ? null : decisionOf(s)?.remainingMedianPct ?? null)
+      : key === "rr" ? decisionOf(s)?.rrToPrimary ?? null
+      : key === "criteria" ? ev.count
       : key === "price" ? s.price
       : key === "dayChgPct" ? ev.dayChg
       : key === "volMultiple" ? ev.volX
@@ -786,7 +803,7 @@ export default function Trinetra() {
       return sign * (av - bv) || (b.ev.volX || 0) - (a.ev.volX || 0);
     });
     return rows;
-  }, [stocks, criteria, query, groupSel, groupsOf, wlSort, wlFilter, firedToday, evalFor, profilesSatisfied]);
+  }, [stocks, criteria, query, groupSel, groupsOf, wlSort, wlFilter, firedToday, evalFor, profilesSatisfied, decisionOf]);
 
   const activeFilters = [
     groupSel !== "ALL" && ["group", groupSel, () => setGroupSel("ALL")],
@@ -1104,6 +1121,22 @@ export default function Trinetra() {
                   <div style={{ fontFamily: T.mono, fontSize: 11, color: T.mute, marginTop: 2 }}>
                     ₹{fmtIN(s.price)}<span style={{ color: ev.dayChg >= 0 ? T.green : T.red, marginLeft: 7 }}>{ev.dayChg >= 0 ? "+" : ""}{ev.dayChg?.toFixed(1)}%</span>
                   </div>
+                  {(() => {
+                    const d = profileSel !== "ALL" ? s.decisions?.[profileSel] : null;
+                    if (!d) return null;
+                    const c = d.confidence || {};
+                    const potential = d.noEstimate ? "no estimate for this horizon"
+                      : d.insufficientHistory ? `too few analogs (n=${d.analogsN ?? 0})`
+                      : d.exhausted ? "typical move spent"
+                      : d.remainingMedianPct != null ? `est. ${d.remainingMedianPct > 0 ? "+" : ""}${d.remainingMedianPct.toFixed(1)}% left · n=${d.analogsN ?? 0}` : null;
+                    return (
+                      <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid, marginTop: 3, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {c.score != null && <span>conf {c.score} {c.band}{c.capped ? " · capped" : ""}</span>}
+                        {potential && <span style={{ color: d.exhausted ? T.amber : T.dimSolid }}>{potential}</span>}
+                        {d.rrToPrimary != null && <span style={{ color: d.rrToPrimary < 1 ? T.red : T.dimSolid }}>R:R {d.rrToPrimary.toFixed(1)}</span>}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                   <FundDot rec={funds[s.symbol]} />
