@@ -7,6 +7,8 @@ import Brief from "./Brief";
 import { DecisionStrip } from "./Decision";
 import { trackApi } from "../lib/track";
 import { deskApi } from "../lib/desk";
+import ProfileCriteria from "./ProfileCriteria";
+import StockDecision from "./StockDecision";
 
 /* ================================================================
    TRINETRA — the eye opens when everything aligns
@@ -1222,6 +1224,20 @@ export default function Trinetra() {
               </div>
             ))}
           </div>
+          {liveBackend && (
+            <PraveshBoundary>
+              <StockDecision backendUrl={backendUrl} symbol={s.symbol} profileId={profileSel} price={s.price} />
+            </PraveshBoundary>
+          )}
+          {liveBackend && (
+            <div style={{ marginTop: 12 }}>
+              {held.has(s.symbol)
+                ? <span style={{ fontFamily: T.mono, fontSize: 10.5, color: T.green }}>✓ marked as a holding</span>
+                : <button onClick={() => markHolding(s.symbol)} disabled={holdBusy === s.symbol} style={btn(true)}>
+                    {holdBusy === s.symbol ? "marking…" : "I'm holding this"}
+                  </button>}
+            </div>
+          )}
           <details style={{ marginTop: 14 }}>
             <summary style={{ fontFamily: T.mono, fontSize: 11, color: T.dimSolid, cursor: "pointer" }}>Raw snapshot (audit)</summary>
             <pre style={{ marginTop: 8, padding: 12, borderRadius: 8, background: T.bg, border: "1px solid " + T.line, fontSize: 10, color: T.mute, overflowX: "auto" }}>{JSON.stringify({ price: s.price, prevClose: s.prevClose, high20: s.high20, high52: +(+s.high52).toFixed(2), volToday: s.volToday, avgVol20: s.avgVol20, bidQty: s.bidQty, askQty: s.askQty, fund: s.fund }, null, 2)}</pre>
@@ -1259,18 +1275,13 @@ export default function Trinetra() {
 
       {/* criteria panel */}
       {panel === "criteria" && <Drawer title="Criteria" onClose={() => setPanel(null)}>
-        {/* The engine reads config.profiles now, not this flat list. Until the
-            editor is per-profile, saying so is the difference between "my edit
-            did nothing" and a known limitation. */}
-        {profiles && (
-          <div style={{ background: T.amber + "10", border: "1px solid " + T.amber + "44", borderRadius: 9,
-            padding: "10px 12px", marginBottom: 12, fontSize: 11.5, color: T.mute, lineHeight: 1.6 }}>
-            ⚠ The backend now evaluates <span style={{ color: T.ink }}>four profiles</span> ({Object.keys(profiles).join(", ")}),
-            each with its own criteria. This editor still edits the single legacy list, so changes here no longer drive the
-            server-side scan — switch horizons with the profile chips above the watchlist. A per-profile editor is the next
-            piece of work.
-          </div>
-        )}
+        {profiles ? (
+          <ProfileCriteria backendUrl={backendUrl} profiles={profiles}
+            metricOptions={[...new Set([...Object.keys(METRICS), ...fundColumns])]}
+            metricLabel={id => metricMeta(id).label}
+            onSaved={loadProfiles} />
+        ) : (
+          <>
         <div style={{ fontSize: 11.5, color: T.mute, marginBottom: 12, lineHeight: 1.55 }}>The eye opens only when every enabled criterion locks. Toggle, tune, or add your own. {mode === "live" && "Hit Sync in the feed panel to push changes to the backend."}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {criteria.filter(c => c.id !== "kron").map(c => (
@@ -1303,11 +1314,14 @@ export default function Trinetra() {
             <span style={{ color: T.dimSolid, fontSize: 13 }}>→</span>
           </button>
           <button onClick={addCriterion} style={{ padding: 11, borderRadius: 9, border: "1px dashed " + T.brass + "55", background: "none", color: T.brass, fontSize: 12.5 }}>+ New criterion</button>
-          <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 4 }}>
-            <span style={{ color: T.mute, fontSize: 12 }}>Scan every (seconds)</span>
-            <input type="number" min="1" value={interval_} onChange={e => setInterval_(Math.max(1, +e.target.value))} style={{ ...inS, width: 70, textAlign: "right" }} />
-          </label>
-        </div>
+          </div>
+          </>
+        )}
+        {/* the scan cadence applies to both editors */}
+        <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 10 }}>
+          <span style={{ color: T.mute, fontSize: 12 }}>Scan every (seconds)</span>
+          <input type="number" min="1" value={interval_} onChange={e => setInterval_(Math.max(1, +e.target.value))} style={{ ...inS, width: 70, textAlign: "right" }} />
+        </label>
       </Drawer>}
 
       {/* alerts panel */}

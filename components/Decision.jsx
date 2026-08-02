@@ -116,7 +116,9 @@ export function PotentialLine({ potential, horizon }) {
         )}
       </div>
 
-      {p.kind === "thin" && p.bounds && (
+      {/* Only when real numbers came back — the backend often states the bounds
+          inside `basis` instead, and "—–—" is worse than saying nothing. */}
+      {p.kind === "thin" && Number.isFinite(p.bounds?.low) && Number.isFinite(p.bounds?.high) && (
         <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.mute, marginTop: 4 }}>
           volatility bounds {pctText(p.bounds.low)}–{pctText(p.bounds.high, false)}
         </div>
