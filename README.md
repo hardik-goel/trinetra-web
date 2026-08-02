@@ -18,6 +18,56 @@ That's it. The app opens like any website — on your phone or laptop — and
 **auto-connects to your backend on load** (no pasting URLs). Add the site to
 your phone's home screen for an app-like icon.
 
+## Install it (PWA)
+
+Trinetra installs to a home screen from the browser — no store, no build step.
+
+- **iPhone / iPad — you must use Safari.** Open the site in Safari, tap **Share**, then
+  **Add to Home Screen**. *Chrome, Firefox and Edge on iOS cannot install it* — Apple
+  restricts Add to Home Screen to Safari, so those browsers show a line telling you to
+  switch rather than a button that would do nothing.
+- **Android** — Chrome, Edge or Samsung Internet show an **Install** prompt; otherwise
+  browser menu → **Install app**.
+- **Desktop Chrome / Edge** — the install icon at the right of the address bar.
+
+Once installed it opens standalone in the warm-black shell, with the notch, dynamic
+island and home indicator cleared via `env(safe-area-inset-*)` and no white flash on
+launch. Push notifications are **not** part of the installed app: iOS web push needs
+16.4+, an installed PWA, a push service and VAPID keys, none of which exist here.
+Telegram remains the alert channel that works with the app closed.
+
+### Caching: the shell, never the market
+
+The service worker (`public/sw.js`) caches the app shell and **nothing you could trade
+on**. A cached price is a price from an unknown moment, which in a market dashboard is
+worse than a blank space. The policy:
+
+| request | behaviour |
+|---|---|
+| `/_next/static/*`, icons, fonts | cache-first |
+| navigations | network-first, cached shell only if the network fails |
+| **anything cross-origin** (backend API, Pravesh feed) | **never intercepted, never stored** |
+| same-origin data paths (`/snapshot`, `/holdings`, …) | network-only |
+
+Verified rather than assumed: with the backend wired, 19 API/Pravesh responses were
+served straight from the network, **0** by the service worker, and the shell cache held
+**0** data URLs. If you ever proxy the API onto this origin, the registration passes
+`NEXT_PUBLIC_BACKEND_URL` and `NEXT_PUBLIC_PRAVESH_DATA_URL` origins to the worker as
+`?bypass=` so they stay excluded.
+
+Offline, navigations fall back to `/offline`, which deliberately shows no numbers at all.
+
+### Shipping a new version
+
+Bump `CACHE_VERSION` at the top of `public/sw.js` whenever the shell changes. On
+activate, every older `trinetra-shell-*` cache is deleted, and the app shows a
+**"New version available · Reload"** toast rather than reloading under you mid-decision.
+Tested: seeded `v0` + `v1` caches, shipped `v2`, tapped Reload — only `v2` survived.
+
+> Running other projects on `localhost:3000`? A service worker from a previous project
+> can white-screen this one, and vice versa. Unregister via DevTools → Application →
+> Service Workers, or `(await navigator.serviceWorker.getRegistrations()).forEach(r => r.unregister())`.
+
 ## Profiles, Brief and Positions
 
 **Profiles.** The backend evaluates four horizons independently — Intraday, Swing,
