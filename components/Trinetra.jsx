@@ -20,12 +20,29 @@ const T = {
   sans: "'Inter', ui-sans-serif, system-ui, sans-serif",
 };
 
+/* Fundamentals catalog — mirrors trinetra-backend/fundamentals.config.js.
+   A metric added there needs one line here and becomes selectable as a criteria
+   check everywhere. Keys must match the backend exactly, or a check silently
+   reads undefined and evaluates as "no data". */
+const FUND_METRICS = {
+  roe:           { label: "Return on equity", unit: "%" },
+  roce:          { label: "Return on capital employed", unit: "%" },
+  de:            { label: "Debt / equity", unit: "" },
+  pe:            { label: "Price / earnings", unit: "" },
+  pb:            { label: "Price / book", unit: "" },
+  dividendYield: { label: "Dividend yield", unit: "%" },
+  opm:           { label: "Operating margin", unit: "%" },
+  profitGrowth:  { label: "Profit growth (3y)", unit: "%" },
+  salesGrowth3y: { label: "Sales growth (3y)", unit: "%" },
+  promoter:      { label: "Promoter holding", unit: "%" },
+  epsGrowth3y:   { label: "EPS growth (3y)", unit: "%" },
+  pledged:       { label: "Pledged shares", unit: "%" },
+  piotroski:     { label: "Piotroski F-score", unit: "" },
+};
+
 const METRICS = {
-  roe:          { label: "Return on equity", unit: "%",   group: "F", get: s => s.fund?.roe },
-  de:           { label: "Debt / equity", unit: "",       group: "F", get: s => s.fund?.de },
-  profitGrowth: { label: "Profit growth (3y)", unit: "%", group: "F", get: s => s.fund?.profitGrowth },
-  promoter:     { label: "Promoter holding", unit: "%",   group: "F", get: s => s.fund?.promoter },
-  pledged:      { label: "Pledged shares", unit: "%",     group: "F", get: s => s.fund?.pledged },
+  ...Object.fromEntries(Object.entries(FUND_METRICS).map(([k, m]) =>
+    [k, { ...m, group: "F", get: s => s.fund?.[k] }])),
   dayChgPct:    { label: "Day change", unit: "%",         group: "B", get: s => ((s.price - s.prevClose) / s.prevClose) * 100 },
   aboveHigh20:  { label: "Above 20-day high", unit: "y/n",group: "B", get: s => (s.price > s.high20 ? 1 : 0) },
   pctOf52wHigh: { label: "% of 52-wk high", unit: "%",    group: "B", get: s => (s.price / s.high52) * 100 },
@@ -34,10 +51,28 @@ const METRICS = {
   price:        { label: "Last price", unit: "₹",         group: "B", get: s => s.price },
   fcstReturn:   { label: "AI forecast return", unit: "%", group: "K", get: s => s.fcst?.ret },
 };
+/* Provenance fields ride in the same record as the metrics; they are not metrics. */
+const FUND_NON_METRIC = new Set(["status", "source", "fetchedAt", "missing", "symbol"]);
+/* The backend catalog — not this file — decides which metrics exist, and its
+   engine turns every catalog key into a valid check for free. So a key this
+   build has never heard of must still resolve, sort and filter: it reads off
+   s.fund and gets a humanized label until someone names it in FUND_METRICS.
+   Without this fallback a metric added to the backend would render "—" here
+   while the backend happily evaluated it — the two silently disagreeing. */
+const humanize = id => id.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/^./, c => c.toUpperCase());
+const guessUnit = id => /(pct|percent|growth|margin|yield|roe|roce|opm|promoter|pledged)/i.test(id) ? "%" : "";
+const metricMeta = id =>
+  METRICS[id] || { label: humanize(id), unit: guessUnit(id), group: "F", get: s => s.fund?.[id], adhoc: true };
+const isFundMetric = id => metricMeta(id).group === "F";
+/* Which side of a threshold is the good side — only used to pick the default
+   operator when you build a filter, never to judge a value. */
+const FUND_DIR_LOW = new Set(["de", "pe", "pb", "pledged"]);
+const defaultOp = id => (FUND_DIR_LOW.has(id) ? "lte" : "gte");
+
 const fmtIN = v => (+v).toLocaleString("en-IN");
 const fmtVal = (id, v) => {
   if (v == null || Number.isNaN(v)) return "—";
-  const u = METRICS[id].unit;
+  const u = metricMeta(id).unit;
   if (u === "y/n") return v ? "yes" : "no";
   if (u === "₹") return "₹" + fmtIN((+v).toFixed(2));
   return (+v).toFixed(u === "×" || u === "" ? 2 : 1) + u;
@@ -45,9 +80,9 @@ const fmtVal = (id, v) => {
 const OPS = { gte: "≥", lte: "≤" };
 /* Seed fundamentals are hand-entered and never confirmed by a scrape. They are
    shown, but they cannot tick a box — mirrors lib/engine.js on the backend. */
-const isUnverified = (s, metric) => METRICS[metric]?.group === "F" && s.fund?.status === "seed";
+const isUnverified = (s, metric) => isFundMetric(metric) && s.fund?.status === "seed";
 const checkOk = (s, c) => {
-  const v = METRICS[c.metric]?.get(s);
+  const v = metricMeta(c.metric).get(s);
   if (v == null || Number.isNaN(v)) return { v, ok: false, na: true };
   if (isUnverified(s, c.metric)) return { v, ok: false, na: false, unverified: true };
   return { v, ok: c.op === "gte" ? v >= c.value : v <= c.value, na: false };
@@ -55,7 +90,7 @@ const checkOk = (s, c) => {
 function evaluate(s, criteria) {
   const active = criteria.filter(c => c.enabled);
   const results = active.map(c => {
-    const checks = c.checks.map(ch => { const r = checkOk(s, ch); return { label: METRICS[ch.metric].label, value: fmtVal(ch.metric, r.v), req: OPS[ch.op] + " " + fmtVal(ch.metric, ch.value), ok: r.ok, na: r.na, unverified: r.unverified }; });
+    const checks = c.checks.map(ch => { const r = checkOk(s, ch); return { label: metricMeta(ch.metric).label, value: fmtVal(ch.metric, r.v), req: OPS[ch.op] + " " + fmtVal(ch.metric, ch.value), ok: r.ok, na: r.na, unverified: r.unverified }; });
     return { ...c, checksOut: checks, pass: checks.length > 0 && checks.every(x => x.ok), na: checks.some(x => x.na), unverified: checks.some(x => x.unverified) };
   });
   return { criteria: results, count: results.filter(r => r.pass).length, total: active.length,
@@ -83,7 +118,22 @@ function makeUniverse() {
     const hist = []; let p = base * (.88 + Math.random() * .04);
     for (let i = 0; i < 40; i++) { p *= 1 + (Math.random() - .485) * .012; hist.push(+p.toFixed(2)); }
     const avgVol = Math.round(2e5 + Math.random() * 3e6);
-    return { symbol, name, sector, scenario, fund: { roe, de, profitGrowth: pg, promoter: ph, pledged: pl, status: "demo" },
+    // Demo fundamentals are simulated, so the extended metrics are derived from
+    // the seed rather than left blank — otherwise a criterion on P/E or ROCE
+    // would read "no data" in demo and the feed would look broken.
+    const demoFund = {
+      roe, de, profitGrowth: pg, promoter: ph, pledged: pl,
+      roce: +(roe * 1.35).toFixed(1),
+      pe: +(18 + roe * 0.9).toFixed(1),
+      pb: +(1.2 + roe * 0.22).toFixed(2),
+      dividendYield: +(1.6 - roe * 0.03).toFixed(2),
+      opm: +(8 + roe * 0.55).toFixed(1),
+      salesGrowth3y: +(pg * 0.75).toFixed(1),
+      epsGrowth3y: +(pg * 0.95).toFixed(1),
+      piotroski: null, // never published — matches the live feed's honest gap
+      status: "demo",
+    };
+    return { symbol, name, sector, scenario, fund: demoFund,
       price: hist.at(-1), prevClose: hist.at(-2), high20: Math.max(...hist.slice(-20)), high52: Math.max(...hist) * (1 + Math.random() * .06),
       hist, avgVol20: avgVol, volToday: Math.round(avgVol * (.3 + Math.random() * .4)),
       bidQty: Math.round(1e4 + Math.random() * 9e4), askQty: Math.round(1e4 + Math.random() * 9e4), tickN: 0 };
@@ -159,6 +209,28 @@ function FundDot({ rec, size = 10 }) {
     style={{ color: s.color, fontSize: size, fontFamily: T.mono, lineHeight: 1 }}>{s.glyph}</span>;
 }
 
+/* The Fundamentals chip glyph — a ledger page, in family with the eye and the
+   doorway: same 1.1 stroke, same brass. */
+function LedgerGlyph({ size = 13, color = T.brass }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 12 14" fill="none" aria-hidden="true" style={{ display: "block" }}>
+      <rect x="1.6" y="1" width="8.8" height="12" rx="1.4" stroke={color} strokeWidth="1.1" />
+      <path d="M4 4.4h4M4 7h4M4 9.6h2.4" stroke={color} strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/* Column headers live in a crowded table, so long catalog names get an
+   abbreviation. Anything unabbreviated falls back to the first word — never to
+   a truncation that could read as a different metric. */
+const SHORT_LABEL = {
+  roe: "ROE", roce: "ROCE", de: "D/E", pe: "P/E", pb: "P/B",
+  dividendYield: "DIV YLD", opm: "OPM", profitGrowth: "PAT 3Y",
+  salesGrowth3y: "SALES 3Y", promoter: "PROMOTER", epsGrowth3y: "EPS 3Y",
+  pledged: "PLEDGED", piotroski: "PIOTROSKI",
+};
+const shortLabel = (key, label) => SHORT_LABEL[key] || label.split(" ")[0].toUpperCase();
+
 function StatusDot({ state }) {
   const c = state === "live" ? T.green : state === "demo" ? T.brass : state === "error" ? T.red : T.dimSolid;
   return <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -208,6 +280,8 @@ export default function Trinetra() {
   const [funds, setFunds] = useState({});
   const [fundBusy, setFundBusy] = useState("");  // symbol mid-refresh, or "all"
   const [fundMsg, setFundMsg] = useState("");
+  const [fundSort, setFundSort] = useState({ key: "symbol", dir: "asc" });
+  const [fundDraft, setFundDraft] = useState({ metric: "roce", op: "gte", value: 20 });
 
   const loadFundamentals = useCallback(async url => {
     try {
@@ -434,6 +508,69 @@ export default function Trinetra() {
   const oracleLive = stocks.some(s => s.fcst);
   const oracleEngine = stocks.find(s => s.fcst)?.fcst?.engine || null;
 
+  /* ── fundamentals matrix ───────────────────────────────────────────
+     Columns come from the data, not from a list in this file: the named
+     catalog first, then any key the backend has started sending that this
+     build does not know about. That is what makes a metric added on the
+     backend show up here on the next scrape with no frontend release.     */
+  const fundCrit = criteria.find(c => c.id === "fund");
+  const fundChecks = fundCrit?.checks || [];
+  const fundRecFor = useCallback(
+    sym => funds[sym] || stocks.find(s => s.symbol === sym)?.fund || null,
+    [funds, stocks]);
+
+  const fundColumns = useMemo(() => {
+    const known = Object.keys(FUND_METRICS);
+    const seen = new Set(known);
+    const extra = [];
+    for (const rec of [...Object.values(funds), ...stocks.map(s => s.fund)]) {
+      if (!rec) continue;
+      for (const k of Object.keys(rec)) {
+        if (FUND_NON_METRIC.has(k) || seen.has(k) || typeof rec[k] === "object") continue;
+        seen.add(k); extra.push(k);
+      }
+    }
+    return [...known, ...extra];
+  }, [funds, stocks]);
+
+  const fundRows = useMemo(() => {
+    const rows = uniList.map(sym => {
+      const rec = fundRecFor(sym);
+      // Evaluate against a stock-shaped object so one code path judges a cell
+      // here and a gate in the detail drawer — they cannot disagree.
+      const asStock = { fund: rec || undefined };
+      const verdicts = {};
+      for (const ch of fundChecks) {
+        const r = checkOk(asStock, ch);
+        const prev = verdicts[ch.metric];
+        // Two checks on one metric: the cell passes only if both do.
+        verdicts[ch.metric] = prev ? { ...r, ok: prev.ok && r.ok, na: prev.na || r.na } : r;
+      }
+      return { sym, rec, verdicts, pass: fundChecks.length > 0 && fundChecks.every(ch => checkOk(asStock, ch).ok) };
+    });
+    const { key, dir } = fundSort;
+    const sign = dir === "asc" ? 1 : -1;
+    rows.sort((a, b) => {
+      if (key === "symbol") return sign * a.sym.localeCompare(b.sym);
+      const av = a.rec?.[key], bv = b.rec?.[key];
+      // Missing data sorts last in both directions — it is not a low value.
+      if (av == null && bv == null) return a.sym.localeCompare(b.sym);
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return sign * (av - bv);
+    });
+    return rows;
+  }, [uniList, fundRecFor, fundChecks, fundSort]);
+
+  const toggleFundSort = key => setFundSort(s =>
+    s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: key === "symbol" ? "asc" : "desc" });
+  const addFundCheck = () => {
+    const { metric, op, value } = fundDraft;
+    if (!metric || Number.isNaN(+value)) return;
+    upCrit("fund", c => ({ ...c, checks: [...c.checks, { metric, op, value: +value }] }));
+  };
+  const fundPassCount = fundRows.filter(r => r.pass).length;
+
   const css = `
     @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap');
     * { box-sizing: border-box; }
@@ -519,6 +656,12 @@ export default function Trinetra() {
           </button>
           <button onClick={() => setPanel("oracle")} style={chip(kronEnabled)}>
             <span style={{ fontSize: 12 }}>◉</span> Oracle {kronEnabled && <span style={{ color: T.green }}>●</span>}
+          </button>
+          {/* Fundamentals — the whole scraped matrix, and where fundamental
+              filters get built. The count is checks on the F criterion. */}
+          <button onClick={() => setPanel("fundamentals")} style={chip(panel === "fundamentals")}>
+            <LedgerGlyph size={12} color={panel === "fundamentals" ? T.brass : T.mute} /> Fundamentals
+            <span style={{ color: fundCrit?.enabled ? T.brass : T.dimSolid, fontFamily: T.mono }}>{fundChecks.length}</span>
           </button>
           <button onClick={() => setPanel("universe")} style={chip()}>Universe <span style={{ color: T.mute, fontFamily: T.mono }}>{uniList.length}</span></button>
           {/* Pravesh — IPO intelligence from a separate engine, read-only here.
@@ -959,6 +1102,172 @@ export default function Trinetra() {
           Kronos is open-source (MIT) · shiyu-coder/Kronos. Forecasts are probabilistic, not promises. Decision support, not investment advice.
         </p>
       </Drawer>}
+
+      {/* fundamentals panel — the whole scraped matrix in one place, and the
+          only screen where a fundamental filter can be built by hand */}
+      {panel === "fundamentals" && (() => {
+        const lock = !liveBackend || !!fundBusy;           // demo is read-only
+        const counts = fundRows.reduce((a, r) => {
+          const st = r.rec?.status;
+          a[st === "fetched" || st === "partial" ? st : st === "demo" ? "demo" : st === "seed" ? "seed" : "none"]++;
+          return a;
+        }, { fetched: 0, partial: 0, seed: 0, demo: 0, none: 0 });
+        const arrow = k => (fundSort.key !== k ? "" : fundSort.dir === "asc" ? " ▲" : " ▼");
+        const th = (k, label, title) => (
+          <th key={k} title={title} onClick={() => toggleFundSort(k)}
+            style={{ position: "sticky", top: 0, zIndex: 1, background: T.panel, cursor: "pointer", whiteSpace: "nowrap",
+              textAlign: k === "symbol" ? "left" : "right", padding: "7px 8px", borderBottom: "1px solid " + T.line,
+              fontFamily: T.mono, fontSize: 9, letterSpacing: 1, fontWeight: 400,
+              color: fundSort.key === k ? T.brass : T.dimSolid }}>
+            {label}{arrow(k)}
+          </th>
+        );
+        return <Drawer wide title="Fundamentals" onClose={() => setPanel(null)}>
+          <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginTop: -6, marginBottom: 12 }}>
+            {liveBackend
+              ? <>Every metric the backend scrapes, for all {fundRows.length} names it watches. Cells are judged against the
+                  Fundamentals criterion below — <span style={{ color: T.green }}>green passes</span>, <span style={{ color: T.red }}>red fails</span>,
+                  grey has no threshold set. <span style={{ color: T.dimSolid }}>Click any column to sort.</span></>
+              : <>Demo fundamentals — simulated from the seed so the matrix is explorable. <span style={{ color: T.ink }}>They are not real
+                  company numbers.</span> Connect a live backend to scrape the real ones.</>}
+          </div>
+
+          {/* pass summary + provenance */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+            <span style={{ fontFamily: T.mono, fontSize: 10.5, color: fundChecks.length ? T.brass : T.dimSolid }}>
+              {fundChecks.length ? `${fundPassCount}/${fundRows.length} pass all ${fundChecks.length} checks` : "no fundamental checks set"}
+            </span>
+            <span style={{ fontSize: 10.5, color: T.dimSolid, display: "flex", gap: 9, flexWrap: "wrap" }}>
+              {counts.fetched > 0 && <span><FundDot rec={{ status: "fetched" }} /> {counts.fetched} complete</span>}
+              {counts.partial > 0 && <span><FundDot rec={{ status: "partial" }} /> {counts.partial} partial</span>}
+              {counts.seed > 0 && <span><FundDot rec={{ status: "seed" }} /> {counts.seed} seed</span>}
+              {counts.none > 0 && <span><FundDot rec={{ status: "unavailable" }} /> {counts.none} none</span>}
+              {counts.demo > 0 && <span style={{ fontFamily: T.mono }}>◌ {counts.demo} demo</span>}
+            </span>
+            <button onClick={refreshAllFunds} disabled={lock || !fundRows.length}
+              style={{ ...btn(), marginLeft: "auto", opacity: lock || !fundRows.length ? .4 : 1 }}>
+              {fundBusy === "all" ? "Refreshing…" : "Refresh all fundamentals"}
+            </button>
+          </div>
+          {fundMsg && <div style={{ fontSize: 10.5, marginBottom: 8, lineHeight: 1.5, color: /failed/.test(fundMsg) ? T.red : T.mute }}>{fundMsg}</div>}
+
+          {/* the matrix */}
+          <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, overflow: "auto", maxHeight: "46vh" }}>
+            <table style={{ borderCollapse: "collapse", width: "100%" }}>
+              <thead>
+                <tr>
+                  {th("symbol", "SYMBOL")}
+                  {fundColumns.map(k => {
+                    const m = metricMeta(k);
+                    const checked = fundChecks.filter(c => c.metric === k);
+                    return th(k,
+                      (m.adhoc ? "＋" : "") + shortLabel(k, m.label) + (checked.length ? " •" : ""),
+                      `${m.label}${m.unit ? " (" + m.unit + ")" : ""}` +
+                      (checked.length ? " · filtered " + checked.map(c => OPS[c.op] + " " + c.value).join(" and ") : "") +
+                      (m.adhoc ? " · new metric from the backend — not named in this build yet" : ""));
+                  })}
+                  <th style={{ position: "sticky", top: 0, background: T.panel, borderBottom: "1px solid " + T.line,
+                    padding: "7px 8px", fontFamily: T.mono, fontSize: 9, letterSpacing: 1, fontWeight: 400, color: T.dimSolid, textAlign: "right" }}>DATA</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fundRows.map(({ sym, rec, verdicts, pass }) => (
+                  <tr key={sym}>
+                    <td style={{ padding: "7px 8px", borderBottom: "1px solid " + T.lineSoft, fontFamily: T.mono, fontSize: 11.5,
+                      color: pass ? T.brass : T.ink, whiteSpace: "nowrap" }}>
+                      {sym}
+                    </td>
+                    {fundColumns.map(k => {
+                      const v = rec?.[k];
+                      const j = verdicts[k];
+                      const color = v == null ? T.dim
+                        : !j ? T.mute
+                        : j.unverified ? T.dimSolid
+                        : j.ok ? T.green : T.red;
+                      return (
+                        <td key={k} title={j?.unverified ? "Unverified seed value — shown, but it cannot lock the gate" : undefined}
+                          style={{ padding: "7px 8px", borderBottom: "1px solid " + T.lineSoft, textAlign: "right",
+                            fontFamily: T.mono, fontSize: 11, whiteSpace: "nowrap", color,
+                            background: j && !j.na && !j.unverified ? (j.ok ? T.green + "0E" : T.red + "0E") : "transparent" }}>
+                          {fmtVal(k, v)}
+                        </td>
+                      );
+                    })}
+                    <td style={{ padding: "7px 8px", borderBottom: "1px solid " + T.lineSoft, textAlign: "right", whiteSpace: "nowrap" }}>
+                      {rec?.status === "demo"
+                        ? <span style={{ fontFamily: T.mono, fontSize: 9, color: T.dimSolid }}>◌ demo</span>
+                        : <span title={rec?.source || undefined} style={{ fontFamily: T.mono, fontSize: 9, color: T.dimSolid }}>
+                            <FundDot rec={rec || { status: "unavailable" }} /> {rec?.status || "none"}
+                          </span>}
+                    </td>
+                  </tr>
+                ))}
+                {!fundRows.length && (
+                  <tr><td colSpan={fundColumns.length + 2} style={{ padding: "22px 12px", textAlign: "center", fontSize: 12, color: T.dimSolid }}>
+                    Universe is empty — add symbols first.
+                  </td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* filter builder */}
+          <div style={{ marginTop: 16, borderTop: "1px solid " + T.lineSoft, paddingTop: 14 }}>
+            <SectionMini>Build a fundamental filter</SectionMini>
+            <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.55, marginBottom: 10 }}>
+              Adds a check to the Fundamentals criterion — the same gate the eye opens on. Threshold ideas like
+              <span style={{ color: T.ink }}> Piotroski ≥ 7</span> or <span style={{ color: T.ink }}>ROCE ≥ 20%</span> are yours to set;
+              nothing here suggests a level.
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+              <select value={fundDraft.metric}
+                onChange={e => setFundDraft(d => ({ ...d, metric: e.target.value, op: defaultOp(e.target.value) }))}
+                style={{ ...inS, flex: "1 1 190px", minWidth: 150 }}>
+                {fundColumns.map(k => <option key={k} value={k}>{metricMeta(k).label}</option>)}
+              </select>
+              <select value={fundDraft.op} onChange={e => setFundDraft(d => ({ ...d, op: e.target.value }))} style={inS}>
+                <option value="gte">≥</option><option value="lte">≤</option>
+              </select>
+              <input type="number" step="any" value={fundDraft.value}
+                onChange={e => setFundDraft(d => ({ ...d, value: e.target.value }))}
+                style={{ ...inS, width: 78, textAlign: "right" }} />
+              <span style={{ fontFamily: T.mono, fontSize: 10.5, color: T.dimSolid }}>{metricMeta(fundDraft.metric).unit || ""}</span>
+              <button onClick={addFundCheck} style={btn(true)}>Add check</button>
+            </div>
+
+            {/* current checks */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
+              {fundChecks.map((c, i) => (
+                <span key={c.metric + i} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: T.mono, fontSize: 10.5,
+                  color: T.mute, background: T.card, border: "1px solid " + T.line, borderRadius: 6, padding: "5px 7px 5px 9px" }}>
+                  {shortLabel(c.metric, metricMeta(c.metric).label)} {OPS[c.op]} {c.value}{metricMeta(c.metric).unit}
+                  <button onClick={() => upCrit("fund", x => ({ ...x, checks: x.checks.filter((_, j) => j !== i) }))}
+                    title="Remove this check" style={{ background: "none", border: "none", color: T.dimSolid, fontSize: 11, lineHeight: 1, padding: 0 }}>✕</button>
+                </span>
+              ))}
+              {!fundChecks.length && <span style={{ fontSize: 11.5, color: T.dimSolid }}>No checks yet — the Fundamentals gate passes on everything.</span>}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+              <button onClick={() => upCrit("fund", x => ({ ...x, enabled: !x.enabled }))} style={pill(fundCrit?.enabled ? T.green : T.dimSolid)}>
+                {fundCrit?.enabled ? "ON" : "OFF"}
+              </button>
+              <span style={{ fontSize: 11, color: T.dimSolid }}>
+                {fundCrit?.enabled ? "Counted in every signal." : "Disabled — these checks are ignored by the eye."}
+              </span>
+              {mode === "live"
+                ? <button onClick={pushConfig} style={{ ...btn(true), marginLeft: "auto" }}>Sync criteria to backend →</button>
+                : <span style={{ fontSize: 10.5, color: T.dimSolid, marginLeft: "auto" }}>Demo — nothing to sync.</span>}
+            </div>
+
+            <div style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.55, marginTop: 12 }}>
+              Scraped from screener.in / moneycontrol and cached — these move quarterly, not by the second.
+              A blank cell is a field the scrape could not establish; it is never guessed, and a criterion over it
+              reads as no data rather than a pass. Seed values are shown greyed and cannot lock the gate.
+            </div>
+          </div>
+        </Drawer>;
+      })()}
 
       {/* pravesh panel — mounted only while open, so the screener never pays for
           the IPO fetch, and a bad snapshot is contained by the boundary */}
