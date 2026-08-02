@@ -18,6 +18,28 @@ That's it. The app opens like any website — on your phone or laptop — and
 **auto-connects to your backend on load** (no pasting URLs). Add the site to
 your phone's home screen for an app-like icon.
 
+## The manual
+
+The whole app is documented in one place, rendered twice from `lib/guide.js` so the
+two cannot drift: the **? Help** chip in the action strip, and the standalone page at
+**`/docs`** (shareable, works without the backend). Both carry a search box and jump
+links, and cover navigation, the four profiles, the decision surface, the brief,
+exits, the track record, installing, and the list of things the app refuses to do.
+
+Edit `lib/guide.js` to change either.
+
+## Backup and restore
+
+Positions → **Capital & risk** → **Backup & restore**. `Download backup` pulls one
+file holding holdings, signal history, paper trades, IPO applications, watchlists and
+your tuned profiles; the backend excludes credentials from it. `Restore from file…`
+asks for an explicit confirmation before overwriting, and the backend saves the current
+state to `pre-restore.json` first.
+
+> Do this **before every Render deploy**. Without a persistent disk mounted at `data/`,
+> a redeploy wipes all of it — and you cannot back up through an endpoint that is not
+> deployed yet.
+
 ## Install it (PWA)
 
 Trinetra installs to a home screen from the browser — no store, no build step.

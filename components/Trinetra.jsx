@@ -9,6 +9,7 @@ import { trackApi } from "../lib/track";
 import { deskApi } from "../lib/desk";
 import ProfileCriteria from "./ProfileCriteria";
 import StockDecision from "./StockDecision";
+import Guide from "./Guide";
 
 /* ================================================================
    TRINETRA — the eye opens when everything aligns
@@ -947,6 +948,7 @@ export default function Trinetra() {
             <LedgerGlyph size={12} color={panel === "fundamentals" ? T.brass : T.mute} /> Fundamentals
             <span style={{ color: fundCrit?.enabled ? T.brass : T.dimSolid, fontFamily: T.mono }}>{fundChecks.length}</span>
           </button>
+          <button onClick={() => setPanel("help")} style={chip(panel === "help")} title="How to use Trinetra">? Help</button>
           <button onClick={() => setPanel("brief")} style={chip(panel === "brief")}>☀ Brief</button>
           <button onClick={() => setPanel("positions")} style={chip(panel === "positions")}>
             ◱ Positions {held.size > 0 && <span style={{ color: T.brass, fontFamily: T.mono }}>{held.size}</span>}
@@ -1891,6 +1893,15 @@ export default function Trinetra() {
           </div>
         </Drawer>;
       })()}
+
+      {panel === "help" && <Drawer wide title="How to use Trinetra" onClose={() => setPanel(null)}>
+        <Guide />
+        <div style={{ textAlign: "center", marginTop: 10 }}>
+          <a href="/docs" target="_blank" rel="noreferrer" style={{ fontFamily: T.mono, fontSize: 11, color: T.brass, textDecoration: "none" }}>
+            open the full manual at /docs ↗
+          </a>
+        </div>
+      </Drawer>}
 
       {panel === "brief" && <Drawer wide title="Morning Brief" onClose={() => setPanel(null)}>
         <PraveshBoundary><Brief backendUrl={backendUrl} live={liveBackend} onLeave={() => setPanel(null)} /></PraveshBoundary>

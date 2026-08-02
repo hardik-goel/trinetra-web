@@ -163,7 +163,7 @@ function HoldingRow({ h, exits, armed, onEdit, onDrop, busy }) {
 }
 
 /* ── concentration + sizing ──────────────────────────────────────── */
-function Concentration({ conc, sizing, onSaveSizing, busy }) {
+function Concentration({ conc, sizing, onSaveSizing, onBackup, onRestoreFile, busy }) {
   const [draft, setDraft] = useState(null);
   const cfg = draft ?? sizing ?? {};
   const dirty = draft != null;
@@ -222,6 +222,26 @@ function Concentration({ conc, sizing, onSaveSizing, busy }) {
         </div>
         <div style={{ fontSize: 10.5, color: T.dimSolid, marginTop: 7, lineHeight: 1.55 }}>
           Drives the sizing calculator in the stock detail drawer. Risk % is of capital per trade, not of the position.
+        </div>
+
+        {/* Records that cannot be reconstructed. On Render's free tier a redeploy
+            wipes data/, so this is the step before one — and restore overwrites,
+            which is why it is two taps and not one. */}
+        <div style={{ marginTop: 14, borderTop: "1px solid " + T.lineSoft, paddingTop: 12 }}>
+          <Label>Backup &amp; restore</Label>
+          <div style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.6, marginBottom: 9 }}>
+            Holdings, signal history, paper trades, IPO applications, watchlists and your tuned profiles — one file.
+            Credentials are excluded by the backend. Download before every deploy; a redeploy without a persistent disk
+            wipes all of it.
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <button onClick={onBackup} disabled={busy} style={btn()}>Download backup</button>
+            <label style={{ ...btn(), display: "inline-flex", alignItems: "center" }}>
+              Restore from file…
+              <input type="file" accept="application/json" style={{ display: "none" }}
+                onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) onRestoreFile(f); }} />
+            </label>
+          </div>
         </div>
       </div>
     </div>
@@ -334,7 +354,26 @@ export default function Positions({ backendUrl, live }) {
       ))}
 
       <Concentration conc={data.conc} sizing={data.sizing} busy={state.busy}
-        onSaveSizing={cfg => act(() => api.saveSizing(cfg))} />
+        onSaveSizing={cfg => act(() => api.saveSizing(cfg))}
+        onBackup={async () => {
+          try {
+            const data = await api.backup();
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+            a.download = `trinetra-backup-${new Date().toISOString().slice(0, 10)}.json`;
+            a.click(); URL.revokeObjectURL(a.href);
+          } catch (e) { setState({ busy: false, err: "Backup failed — " + e.message }); }
+        }}
+        onRestoreFile={async (file) => {
+          // Two deliberate acts: choosing the file, then confirming the overwrite.
+          if (!window.confirm(`Restore from ${file.name}? This overwrites holdings, history and trades on the backend. The current state is saved to pre-restore.json first.`)) return;
+          try {
+            const payload = JSON.parse(await file.text());
+            await api.restore(payload);
+            await load();
+            setState({ busy: false, err: "" });
+          } catch (e) { setState({ busy: false, err: "Restore failed — " + e.message }); }
+        }} />
 
       <p style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.6, marginTop: 20, textAlign: "center" }}>
         Exit rules are decision support. They describe what changed against the reason you marked the position —
