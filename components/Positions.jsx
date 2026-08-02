@@ -103,11 +103,12 @@ function ExitCard({ sig, onClose, onDismiss, busy }) {
 }
 
 /* ── holdings ────────────────────────────────────────────────────── */
-function HoldingRow({ h, exits, onEdit, onDrop, busy }) {
+function HoldingRow({ h, exits, armed, onEdit, onDrop, busy }) {
   const [open, setOpen] = useState(false);
   const mine = exits.filter(s => s.holdingId === h.id);
-  const near = (h.ruleStatus || []).filter(r => r.armed && r.distancePct != null)
-    .sort((a, b) => Math.abs(a.distancePct) - Math.abs(b.distancePct))[0];
+  const mineArmed = (armed || []).filter(a => a.holdingId === h.id);
+  const near = [...mineArmed].filter(a => a.distanceToTriggerPct != null)
+    .sort((a, b) => Math.abs(a.distanceToTriggerPct) - Math.abs(b.distanceToTriggerPct))[0];
 
   return (
     <div style={{ background: T.card, border: "1px solid " + (mine.length ? T.red + "44" : T.line), borderRadius: 10, padding: "11px 13px", marginBottom: 7 }}>
@@ -132,13 +133,11 @@ function HoldingRow({ h, exits, onEdit, onDrop, busy }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
         {near && (
           <span style={{ fontFamily: T.mono, fontSize: 10, color: T.amber }}>
-            {near.label || near.rule} {Math.abs(near.distancePct).toFixed(1)}% away
+            {near.headline || near.rule} {Math.abs(near.distanceToTriggerPct).toFixed(1)}% away
           </span>
         )}
-        {(h.ruleStatus || []).length > 0 && (
-          <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid }}>
-            {(h.ruleStatus || []).filter(r => r.armed).length} rules armed
-          </span>
+        {mineArmed.length > 0 && (
+          <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid }}>{mineArmed.length} armed</span>
         )}
         <button onClick={() => setOpen(o => !o)} style={{ ...btn(), padding: "3px 8px", fontSize: 10, marginLeft: "auto" }}>
           {open ? "close" : "edit"}
@@ -232,7 +231,7 @@ function Concentration({ conc, sizing, onSaveSizing, busy }) {
 /* ── shell ───────────────────────────────────────────────────────── */
 export default function Positions({ backendUrl, live }) {
   const api = useMemo(() => (backendUrl ? deskApi(backendUrl) : null), [backendUrl]);
-  const [data, setData] = useState({ holdings: [], exits: [], conc: null, sizing: null });
+  const [data, setData] = useState({ holdings: [], exits: [], armed: [], conc: null, sizing: null });
   const [state, setState] = useState({ busy: true, err: "" });
 
   const load = useCallback(async () => {
@@ -244,7 +243,7 @@ export default function Positions({ backendUrl, live }) {
       api.concentration().catch(() => null),
       api.sizingConfig().catch(() => null),
     ]);
-    setData({ holdings, exits: exitRes?.signals || [], conc, sizing });
+    setData({ holdings, exits: exitRes?.signals || [], armed: exitRes?.armed || [], conc, sizing });
     setState({ busy: false, err: "" });
   }, [api]);
 
@@ -294,13 +293,42 @@ export default function Positions({ backendUrl, live }) {
         </div>
       )}
 
+      {/* Armed but not fired. A trailing stop 2% away is worth seeing and is not
+          a reason to act, so it gets no close button and no severity colour. */}
+      {data.armed.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <Label accent={T.amber}>Armed · nothing broken yet</Label>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {data.armed.map(a => (
+              <div key={a.id} style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 9, padding: "9px 12px" }}>
+                <div style={{ display: "flex", gap: 9, flexWrap: "wrap", alignItems: "baseline" }}>
+                  <span style={{ fontFamily: T.mono, fontSize: 12, color: T.ink }}>{a.symbol}</span>
+                  <span style={{ fontSize: 12, color: T.mute }}>{a.headline || a.rule}</span>
+                  {a.distanceToTriggerPct != null && (
+                    <span style={{ fontFamily: T.mono, fontSize: 10.5, color: T.amber, marginLeft: "auto" }}>
+                      {Math.abs(a.distanceToTriggerPct).toFixed(1)}% away
+                    </span>
+                  )}
+                </div>
+                {(a.reasoning || a.rationale) && (
+                  <div style={{ fontSize: 11.5, color: T.dimSolid, lineHeight: 1.6, marginTop: 5 }}>{a.reasoning || a.rationale}</div>
+                )}
+                <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid, marginTop: 5 }}>
+                  {a.action || "watch"} · not triggered
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <Label>Open holdings · {data.holdings.filter(h => h.status !== "closed").length}</Label>
       {!data.holdings.filter(h => h.status !== "closed").length ? (
         <div style={{ border: "1px dashed " + T.line, borderRadius: 10, padding: "16px 14px", fontSize: 12, color: T.dimSolid }}>
           Nothing marked. Tap <span style={{ color: T.brass }}>I&apos;m holding this</span> on any watchlist row — one tap, no form.
         </div>
       ) : data.holdings.filter(h => h.status !== "closed").map(h => (
-        <HoldingRow key={h.id} h={h} exits={data.exits} busy={state.busy}
+        <HoldingRow key={h.id} h={h} exits={data.exits} armed={data.armed} busy={state.busy}
           onEdit={(id, patch) => act(() => api.patchHolding(id, patch))}
           onDrop={id => act(() => api.dropHolding(id))} />
       ))}
