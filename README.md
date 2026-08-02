@@ -18,6 +18,75 @@ That's it. The app opens like any website — on your phone or laptop — and
 **auto-connects to your backend on load** (no pasting URLs). Add the site to
 your phone's home screen for an app-like icon.
 
+## Watchlist groups, filter and sort
+
+Above the watchlist sits a group selector — **All · Default · …** with counts.
+Groups come from the backend's `/watchlists`; the engine scans the **union** of
+every group, so a symbol in two lists is still watched once. Groups slice the
+view, they never widen what is scanned. Each row carries small group tags, read
+from the `groups` field the backend attaches to every snapshot row.
+
+Manage the lists in the **Universe** panel: create, rename and delete watchlists,
+tap symbol chips to multi-select, then **Move to…** a target list. The last
+remaining list cannot be deleted — the backend refuses, so "where do symbols go?"
+always has an answer.
+
+Sort by criteria met (default), symbol, price, day change, volume multiple, or any
+fundamental metric the backend sends, ascending or descending. Missing values sort
+last in **both** directions, because absent is not a low value. Filter by group,
+minimum criteria met, sector, and a "signal today" toggle; filters compose, active
+ones show as chips, and one tap clears them. Sort and filter live in component
+state — they are how you are looking right now, not a saved preference.
+
+## Track Record — is this worth paying for?
+
+The **Track Record** chip opens the validation module. It exists to answer one
+question before you spend ₹2,000/month on Kite, and it is built to be capable of
+answering *no*. It needs the live backend: signals, trades and applications are
+recorded server-side so they accrue while the tab is closed. Demo mode says so
+rather than inventing a history.
+
+A range control drives every view — 7 / 30 / 90 days, or **Custom** with a
+calendar where both ends are selectable (future dates are not).
+
+- **Signals** — every signal fired in the range with the price at fire, which
+  criteria locked, forward returns at 1/3/7/30 days, and the max gain and max
+  drawdown along the way. Two breakdowns turn it into a lesson: by criteria
+  combination (does 3/3 actually beat 2/3?) and per criterion (how signals *with*
+  it did against those *without*). Each row offers **"Did you take this?"**, which
+  opens the trade logger prefilled and links the trade to the signal.
+- **Paper Trades** — log entry date, price, quantity, optional stop and target,
+  and a free-text thesis. Close with an exit date, price and reason. Open
+  positions mark to market; closed ones show realised P&L. The stats panel gives
+  win rate, average win and loss, expectancy, profit factor, largest win and loss.
+- **IPOs** — what Pravesh suggested in the range with the verdict it gave then,
+  a **"Did you apply?"** logger, allotment tracking and listing gain. Requires
+  `PRAVESH_DATA_URL` on the *backend* for the "engine said apply, you skipped"
+  figure; without it the tile prints the reason instead of a number.
+- **Verdict** — the summary the module exists for, below.
+
+### How to use it for a genuine go/no-go on Kite
+
+1. **Run it for months, not weeks.** Forward returns need 30 days to mature, and
+   the module refuses to print a percentage below **20 closed trades**, **15
+   resolved IPOs** or **20 matured signals** per horizon — it says
+   `insufficient sample (n=6)` instead. That is the honest answer, not a gap.
+2. **Log every decision, including the ones you skip.** The comparison that
+   matters is *your picks vs taking every signal*: a negative `edgePct` means the
+   raw screener beat your selection of it, and the useful response is to take more
+   of its signals, not fewer. That number only exists if you record what you did.
+3. **Read the Verdict tab last.** It states plainly whether the sample supports a
+   conclusion, what the numbers suggest with their n, and the cost line: what the
+   paper book returned over the window against the ₹2,000/month prorated to it.
+4. **Discount the result before you trust it.** Paper trading excludes slippage,
+   brokerage, STT and the psychology of real money; live results are typically
+   worse. Kite also buys live ticks and real order-flow depth this screener cannot
+   price — the cost line compares a paper P&L to a fee, nothing more.
+
+> Track record records live in the backend's `data/` directory. On Render's free
+> tier a redeploy wipes them, which makes a months-long measurement impossible —
+> attach a persistent disk mounted at `data/` before you start counting on it.
+
 ## Oracle: parked
 
 The AI Forecast criterion is **paused**. The forecast service reads free price

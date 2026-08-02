@@ -1,6 +1,8 @@
 "use client";
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import PraveshPanel, { DoorGlyph } from "./PraveshPanel";
+import TrackRecord, { RecordGlyph } from "./TrackRecord";
+import { trackApi } from "../lib/track";
 
 /* ================================================================
    TRINETRA — the eye opens when everything aligns
@@ -296,6 +298,21 @@ export default function Trinetra() {
   const [funds, setFunds] = useState({});
   const [fundBusy, setFundBusy] = useState("");  // symbol mid-refresh, or "all"
   const [fundMsg, setFundMsg] = useState("");
+  /* ── watchlist groups, filter and sort ───────────────────────────
+     Groups come from the backend (/watchlists); the union of every group is
+     what the engine scans, so a group is a view, never a second universe.
+     Sort and filter live in component state on purpose: they are how you are
+     looking right now, not a preference worth persisting. */
+  const [groups, setGroups] = useState(null);           // { name: [symbols] } | null until read
+  const [groupSel, setGroupSel] = useState("ALL");
+  const [wlSort, setWlSort] = useState({ key: "criteria", dir: "desc" });
+  const [wlFilter, setWlFilter] = useState({ minCount: 0, sector: "", signalToday: false });
+  const [picked, setPicked] = useState(() => new Set()); // multi-select for Move to…
+  const [groupBusy, setGroupBusy] = useState(false);
+  const [groupMsg, setGroupMsg] = useState("");
+  const [newGroup, setNewGroup] = useState("");
+  const [renaming, setRenaming] = useState(null);        // { from, to }
+
   const [fundSort, setFundSort] = useState({ key: "symbol", dir: "asc" });
   const [fundDraft, setFundDraft] = useState({ metric: "roce", op: "gte", value: 20 });
 
@@ -336,6 +353,33 @@ export default function Trinetra() {
       loadFundamentals();
     } catch (e) { setFundMsg("Refresh-all failed — " + e.message); }
     finally { setFundBusy(""); }
+  };
+
+  /* Groups are read once a live backend is known, and re-read after every
+     mutation from the server's own response — the API returns the whole map,
+     so the UI never has to guess what the server ended up with. */
+  const track = useMemo(() => (backendUrl ? trackApi(backendUrl) : null), [backendUrl]);
+
+  const loadGroups = useCallback(async () => {
+    if (!track) return;
+    try { const j = await track.watchlists(); setGroups(j?.groups || null); }
+    catch { /* an older backend has no /watchlists — the UI falls back to one flat list */ }
+  }, [track]);
+
+  useEffect(() => { if (liveBackend) loadGroups(); }, [liveBackend, loadGroups]);
+
+  // Every group mutation funnels through here so one place reports failure.
+  const groupOp = async (fn, msg) => {
+    setGroupBusy(true); setGroupMsg("");
+    try {
+      const j = await fn();
+      if (j?.groups) setGroups(j.groups);
+      setGroupMsg(msg || "");
+      loadUniverse();          // the scan set may have changed
+      setPicked(new Set());
+    } catch (e) {
+      setGroupMsg(e.message || "That did not work");
+    } finally { setGroupBusy(false); }
   };
 
   const loadUniverse = useCallback(async url => {
@@ -550,48 +594,6 @@ export default function Trinetra() {
     }
   }, []); // eslint-disable-line
 
-  const ranked = useMemo(() => stocks.map(s => ({ s, ev: evaluate(s, criteria) }))
-    .filter(({ s }) => !query || s.symbol.toLowerCase().includes(query.toLowerCase()) || (s.name || "").toLowerCase().includes(query.toLowerCase()))
-    .sort((a, b) => b.ev.count - a.ev.count || (b.ev.volX || 0) - (a.ev.volX || 0)), [stocks, criteria, query]);
-
-  const askNotif = async () => { if ("Notification" in window) setNotifOn((await Notification.requestPermission()) === "granted"); };
-  const testTg = async () => { setTg(t => ({ ...t, status: "sending…" })); const ok = await tgSend(tg.token, tg.chatId, "✅ TRINETRA test — channel live."); setTg(t => ({ ...t, status: ok ? "Delivered from this browser" : "Failed — check token & chat id" })); };
-
-  /* Saving clears the inputs on success: holding a token in a text box after it
-     has been handed to the server is a credential sitting on screen for no
-     reason. The masked armed line is the receipt. */
-  const saveTelegram = async () => {
-    setTg(t => ({ ...t, status: "saving…" }));
-    const j = await pushConfig();
-    if (j?.config?.alerts?.telegram?.configured) {
-      setTg(t => ({ ...t, token: "", chatId: "", status: "Saved to backend" }));
-    } else {
-      setTg(t => ({ ...t, status: j ? "Backend did not confirm — check its logs" : "Could not reach the backend" }));
-      loadAlertConfig();
-    }
-  };
-
-  const upCrit = (id, fn) => setCriteria(cs => cs.map(c => c.id === id ? fn(c) : c));
-  const addCriterion = () => setCriteria(cs => [...cs, { id: "c" + Date.now(), key: "·", name: "New criterion", enabled: true, builtin: false, checks: [{ metric: "dayChgPct", op: "gte", value: 3 }] }]);
-  const inS = { background: T.bg, border: "1px solid " + T.line, color: T.ink, fontFamily: T.mono, fontSize: 11, borderRadius: 6, padding: "6px 8px" };
-  const activeCount = criteria.filter(c => c.enabled).length;
-  const kronCrit = criteria.find(c => c.id === "kron");
-  /* While parked the criterion reads as off everywhere, whatever the stored
-     state says — a stale "on" must never reach the eye and mute every signal. */
-  const kronEnabled = ORACLE_ENABLED && !!kronCrit?.enabled;
-  const kronThreshold = kronCrit?.checks?.[0]?.value ?? 2;
-  const toggleKron = () => { if (ORACLE_ENABLED) upCrit("kron", x => ({ ...x, enabled: !x.enabled })); };
-  // is the oracle actually feeding data? check if any stock carries a forecast
-  const oracleLive = ORACLE_ENABLED && stocks.some(s => s.fcst);
-  const oracleEngine = ORACLE_ENABLED ? (stocks.find(s => s.fcst)?.fcst?.engine || null) : null;
-
-  /* Belt and braces: the toggle is the only way in, but if the criterion ever
-     arrives enabled (restored state, a synced backend config), park it off
-     rather than let a data-less gate quietly close the eye. */
-  useEffect(() => {
-    if (!ORACLE_ENABLED && kronCrit?.enabled) upCrit("kron", x => ({ ...x, enabled: false }));
-  }, [kronCrit?.enabled]); // eslint-disable-line
-
   /* ── fundamentals matrix ───────────────────────────────────────────
      Columns come from the data, not from a list in this file: the named
      catalog first, then any key the backend has started sending that this
@@ -654,6 +656,105 @@ export default function Trinetra() {
     upCrit("fund", c => ({ ...c, checks: [...c.checks, { metric, op, value: +value }] }));
   };
   const fundPassCount = fundRows.filter(r => r.pass).length;
+
+  /* Which lists a symbol sits in. The snapshot row carries `groups` and is
+     re-tagged by the backend on every watchlist mutation (API.md → /snapshot),
+     so it is the truth; the /watchlists map is only the fallback for a symbol
+     not currently in the snapshot. */
+  const groupsOf = useCallback((sym, row) => {
+    if (Array.isArray(row?.groups)) return row.groups;
+    return groups ? Object.entries(groups).filter(([, syms]) => syms.includes(sym)).map(([n]) => n) : [];
+  }, [groups]);
+  const firedToday = useMemo(() => {
+    const today = new Date().toDateString();
+    return new Set(signals.filter(g => new Date(g.at || Date.now()).toDateString() === today).map(g => g.symbol));
+  }, [signals]);
+  const sectors = useMemo(() => [...new Set(stocks.map(s => s.sector).filter(Boolean))].sort(), [stocks]);
+
+  /* Sort keys are the market metrics plus every fundamental the backend sends,
+     so the list can be ordered by anything the Fundamentals tab can show. */
+  const WL_SORTS = useMemo(() => ([
+    ["criteria", "Criteria met"], ["symbol", "Symbol"], ["price", "Price"],
+    ["dayChgPct", "Day change %"], ["volMultiple", "Volume ×"],
+    ...fundColumns.map(k => [k, metricMeta(k).label]),
+  ]), [fundColumns]);
+
+  const ranked = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const rows = stocks.map(s => ({ s, ev: evaluate(s, criteria), tags: groupsOf(s.symbol, s) }))
+      .filter(({ s, ev, tags }) => {
+        if (q && !s.symbol.toLowerCase().includes(q) && !(s.name || "").toLowerCase().includes(q)) return false;
+        if (groupSel !== "ALL" && !tags.includes(groupSel)) return false;
+        if (wlFilter.minCount && ev.count < wlFilter.minCount) return false;
+        if (wlFilter.sector && s.sector !== wlFilter.sector) return false;
+        if (wlFilter.signalToday && !firedToday.has(s.symbol)) return false;
+        return true;
+      });
+    const { key, dir } = wlSort;
+    const sign = dir === "asc" ? 1 : -1;
+    const valueOf = ({ s, ev }) =>
+      key === "criteria" ? ev.count
+      : key === "price" ? s.price
+      : key === "dayChgPct" ? ev.dayChg
+      : key === "volMultiple" ? ev.volX
+      : metricMeta(key).get(s);
+    rows.sort((a, b) => {
+      if (key === "symbol") return sign * a.s.symbol.localeCompare(b.s.symbol);
+      const av = valueOf(a), bv = valueOf(b);
+      const an = av == null || Number.isNaN(av), bn = bv == null || Number.isNaN(bv);
+      if (an && bn) return a.s.symbol.localeCompare(b.s.symbol);
+      if (an) return 1;                    // missing data sorts last, both directions
+      if (bn) return -1;
+      return sign * (av - bv) || (b.ev.volX || 0) - (a.ev.volX || 0);
+    });
+    return rows;
+  }, [stocks, criteria, query, groupSel, groupsOf, wlSort, wlFilter, firedToday]);
+
+  const activeFilters = [
+    groupSel !== "ALL" && ["group", groupSel, () => setGroupSel("ALL")],
+    wlFilter.minCount > 0 && ["min", `${wlFilter.minCount}+ criteria`, () => setWlFilter(f => ({ ...f, minCount: 0 }))],
+    wlFilter.sector && ["sector", wlFilter.sector, () => setWlFilter(f => ({ ...f, sector: "" }))],
+    wlFilter.signalToday && ["signal", "fired today", () => setWlFilter(f => ({ ...f, signalToday: false }))],
+  ].filter(Boolean);
+
+  const askNotif = async () => { if ("Notification" in window) setNotifOn((await Notification.requestPermission()) === "granted"); };
+  const testTg = async () => { setTg(t => ({ ...t, status: "sending…" })); const ok = await tgSend(tg.token, tg.chatId, "✅ TRINETRA test — channel live."); setTg(t => ({ ...t, status: ok ? "Delivered from this browser" : "Failed — check token & chat id" })); };
+
+  /* Saving clears the inputs on success: holding a token in a text box after it
+     has been handed to the server is a credential sitting on screen for no
+     reason. The masked armed line is the receipt. */
+  const saveTelegram = async () => {
+    setTg(t => ({ ...t, status: "saving…" }));
+    const j = await pushConfig();
+    if (j?.config?.alerts?.telegram?.configured) {
+      setTg(t => ({ ...t, token: "", chatId: "", status: "Saved to backend" }));
+    } else {
+      setTg(t => ({ ...t, status: j ? "Backend did not confirm — check its logs" : "Could not reach the backend" }));
+      loadAlertConfig();
+    }
+  };
+
+  const upCrit = (id, fn) => setCriteria(cs => cs.map(c => c.id === id ? fn(c) : c));
+  const addCriterion = () => setCriteria(cs => [...cs, { id: "c" + Date.now(), key: "·", name: "New criterion", enabled: true, builtin: false, checks: [{ metric: "dayChgPct", op: "gte", value: 3 }] }]);
+  const inS = { background: T.bg, border: "1px solid " + T.line, color: T.ink, fontFamily: T.mono, fontSize: 11, borderRadius: 6, padding: "6px 8px" };
+  const activeCount = criteria.filter(c => c.enabled).length;
+  const kronCrit = criteria.find(c => c.id === "kron");
+  /* While parked the criterion reads as off everywhere, whatever the stored
+     state says — a stale "on" must never reach the eye and mute every signal. */
+  const kronEnabled = ORACLE_ENABLED && !!kronCrit?.enabled;
+  const kronThreshold = kronCrit?.checks?.[0]?.value ?? 2;
+  const toggleKron = () => { if (ORACLE_ENABLED) upCrit("kron", x => ({ ...x, enabled: !x.enabled })); };
+  // is the oracle actually feeding data? check if any stock carries a forecast
+  const oracleLive = ORACLE_ENABLED && stocks.some(s => s.fcst);
+  const oracleEngine = ORACLE_ENABLED ? (stocks.find(s => s.fcst)?.fcst?.engine || null) : null;
+
+  /* Belt and braces: the toggle is the only way in, but if the criterion ever
+     arrives enabled (restored state, a synced backend config), park it off
+     rather than let a data-less gate quietly close the eye. */
+  useEffect(() => {
+    if (!ORACLE_ENABLED && kronCrit?.enabled) upCrit("kron", x => ({ ...x, enabled: false }));
+  }, [kronCrit?.enabled]); // eslint-disable-line
+
 
   const css = `
     @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap');
@@ -749,6 +850,10 @@ export default function Trinetra() {
             <LedgerGlyph size={12} color={panel === "fundamentals" ? T.brass : T.mute} /> Fundamentals
             <span style={{ color: fundCrit?.enabled ? T.brass : T.dimSolid, fontFamily: T.mono }}>{fundChecks.length}</span>
           </button>
+          {/* Track Record — is any of this worth paying for. Server-backed. */}
+          <button onClick={() => setPanel("track")} style={chip(panel === "track")}>
+            <RecordGlyph size={12} color={panel === "track" ? T.brass : T.mute} /> Track Record
+          </button>
           <button onClick={() => setPanel("universe")} style={chip()}>Universe <span style={{ color: T.mute, fontFamily: T.mono }}>{uniList.length}</span></button>
           {/* Pravesh — IPO intelligence from a separate engine, read-only here.
               Opens in place: the screener keeps ticking behind the drawer. */}
@@ -796,18 +901,75 @@ export default function Trinetra() {
         {/* watchlist */}
         <section style={{ marginTop: 26 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-            <SectionLabel muted>Watchlist · {ranked.length}</SectionLabel>
+            <SectionLabel muted>Watchlist · {ranked.length}{ranked.length !== stocks.length ? ` of ${stocks.length}` : ""}</SectionLabel>
             <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search" style={{ ...inS, fontFamily: T.sans, fontSize: 12, width: 130 }} />
           </div>
+
+          {/* group selector — a slice of the same scan set, never a second universe */}
+          {groups && Object.keys(groups).length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+              <button onClick={() => setGroupSel("ALL")} style={{ ...chip(groupSel === "ALL"), padding: "5px 10px", fontSize: 11.5 }}>
+                All <span style={{ fontFamily: T.mono, color: T.dimSolid }}>{uniList.length}</span>
+              </button>
+              {Object.entries(groups).map(([name, syms]) => (
+                <button key={name} onClick={() => setGroupSel(name)} style={{ ...chip(groupSel === name), padding: "5px 10px", fontSize: 11.5 }}>
+                  {name} <span style={{ fontFamily: T.mono, color: T.dimSolid }}>{syms.length}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* sort + filter */}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+            <select value={wlSort.key} onChange={e => setWlSort(s => ({ ...s, key: e.target.value }))} style={{ ...inS, fontSize: 11 }}>
+              {WL_SORTS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+            </select>
+            <button onClick={() => setWlSort(s => ({ ...s, dir: s.dir === "asc" ? "desc" : "asc" }))}
+              title={wlSort.dir === "asc" ? "Ascending" : "Descending"} style={{ ...btn(), padding: "5px 9px" }}>
+              {wlSort.dir === "asc" ? "▲" : "▼"}
+            </button>
+            <select value={wlFilter.minCount} onChange={e => setWlFilter(f => ({ ...f, minCount: +e.target.value }))} style={{ ...inS, fontSize: 11 }}>
+              <option value={0}>Any criteria met</option>
+              {[1, 2, 3, 4, 5].filter(n => n <= activeCount).map(n => <option key={n} value={n}>{n}+ of {activeCount}</option>)}
+            </select>
+            {sectors.length > 0 && (
+              <select value={wlFilter.sector} onChange={e => setWlFilter(f => ({ ...f, sector: e.target.value }))} style={{ ...inS, fontSize: 11 }}>
+                <option value="">All sectors</option>
+                {sectors.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            )}
+            <button onClick={() => setWlFilter(f => ({ ...f, signalToday: !f.signalToday }))}
+              style={{ ...chip(wlFilter.signalToday), padding: "5px 10px", fontSize: 11.5 }}>
+              ⚡ Signal today
+            </button>
+          </div>
+
+          {activeFilters.length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+              {activeFilters.map(([k, label, clear]) => (
+                <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: T.mono, fontSize: 10,
+                  color: T.mute, background: T.brassSoft, border: "1px solid " + T.brass + "3A", borderRadius: 6, padding: "3px 6px 3px 8px" }}>
+                  {label}
+                  <button onClick={clear} style={{ background: "none", border: "none", color: T.dimSolid, fontSize: 10, padding: 0 }}>✕</button>
+                </span>
+              ))}
+              <button onClick={() => { setGroupSel("ALL"); setWlFilter({ minCount: 0, sector: "", signalToday: false }); }}
+                style={{ background: "none", border: "none", color: T.brass, fontFamily: T.mono, fontSize: 10 }}>clear all</button>
+            </div>
+          )}
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
-            {ranked.map(({ s, ev }) => (
+            {ranked.map(({ s, ev, tags }) => (
               <button key={s.symbol} onClick={() => setDetail(s.symbol)}
                 style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderRadius: 10, padding: "11px 14px", textAlign: "left",
                   background: T.card, border: "1px solid " + (ev.locked ? T.brass + "55" : T.line), transition: "border-color .3s" }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
                     <span style={{ fontFamily: T.mono, fontSize: 13, fontWeight: 500 }}>{s.symbol}</span>
                     <span style={{ fontSize: 11, color: T.dimSolid, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.sector || s.name}</span>
+                    {tags?.map(t => (
+                      <span key={t} style={{ fontFamily: T.mono, fontSize: 8, letterSpacing: .6, color: T.dimSolid,
+                        border: "1px solid " + T.line, borderRadius: 4, padding: "1px 4px" }}>{t}</span>
+                    ))}
                   </div>
                   <div style={{ fontFamily: T.mono, fontSize: 11, color: T.mute, marginTop: 2 }}>
                     ₹{fmtIN(s.price)}<span style={{ color: ev.dayChg >= 0 ? T.green : T.red, marginLeft: 7 }}>{ev.dayChg >= 0 ? "+" : ""}{ev.dayChg?.toFixed(1)}%</span>
@@ -1076,15 +1238,87 @@ export default function Trinetra() {
           {liveBackend && pending && uniList.includes(pending) &&
             <div style={{ fontSize: 10.5, color: T.dimSolid, marginTop: -4, marginBottom: 8 }}>{pending} is already in the universe.</div>}
 
-          {/* chips */}
+          {/* watchlist groups — create, rename, delete */}
+          {liveBackend && groups && (
+            <div style={{ borderTop: "1px solid " + T.lineSoft, paddingTop: 12, marginBottom: 12 }}>
+              <SectionMini>Watchlists</SectionMini>
+              <div style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.55, marginBottom: 9 }}>
+                Groups slice the same scan set — the engine watches the union, so a symbol in two lists is still scanned once.
+                Deleting a list drops the symbols only it held.
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 9 }}>
+                {Object.entries(groups).map(([name, syms]) => (
+                  <span key={name} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: T.mono, fontSize: 11,
+                    color: T.mute, background: T.card, border: "1px solid " + T.line, borderRadius: 6, padding: "4px 6px 4px 9px" }}>
+                    {name} <span style={{ color: T.dimSolid }}>{syms.length}</span>
+                    <button onClick={() => setRenaming({ from: name, to: name })} title={"Rename " + name}
+                      style={{ background: "none", border: "none", color: T.dimSolid, fontSize: 10, padding: 0 }}>✎</button>
+                    <button onClick={() => groupOp(() => track.deleteList(name), `Deleted ${name}.`)}
+                      disabled={groupBusy || Object.keys(groups).length === 1}
+                      title={Object.keys(groups).length === 1 ? "The last watchlist cannot be deleted" : "Delete " + name}
+                      style={{ background: "none", border: "none", color: T.dimSolid, fontSize: 11, padding: 0, opacity: Object.keys(groups).length === 1 ? .3 : 1 }}>✕</button>
+                  </span>
+                ))}
+              </div>
+              {renaming && (
+                <div style={{ display: "flex", gap: 6, marginBottom: 9, alignItems: "center" }}>
+                  <input value={renaming.to} onChange={e => setRenaming(r => ({ ...r, to: e.target.value }))}
+                    style={{ ...inS, flex: 1 }} placeholder="New name" />
+                  <button onClick={() => groupOp(() => track.renameList(renaming.from, renaming.to), "Renamed.").then(() => setRenaming(null))}
+                    disabled={groupBusy || !renaming.to.trim()} style={btn(true)}>Rename</button>
+                  <button onClick={() => setRenaming(null)} style={btn()}>Cancel</button>
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 6 }}>
+                <input value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="New watchlist name"
+                  onKeyDown={e => { if (e.key === "Enter" && newGroup.trim()) { groupOp(() => track.createList(newGroup.trim()), `Created ${newGroup.trim()}.`); setNewGroup(""); } }}
+                  style={{ ...inS, flex: 1 }} />
+                <button onClick={() => { groupOp(() => track.createList(newGroup.trim()), `Created ${newGroup.trim()}.`); setNewGroup(""); }}
+                  disabled={groupBusy || !newGroup.trim()} style={{ ...btn(true), opacity: newGroup.trim() ? 1 : .4 }}>Create</button>
+              </div>
+              {groupMsg && <div style={{ fontSize: 10.5, marginTop: 8, color: /not|fail|error|exists/i.test(groupMsg) ? T.red : T.green }}>{groupMsg}</div>}
+            </div>
+          )}
+
+          {/* chips — tap to select, then move the selection to another list */}
+          {liveBackend && groups && picked.size > 0 && (
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 8,
+              background: T.brassSoft, border: "1px solid " + T.brass + "3A", borderRadius: 8, padding: "8px 10px" }}>
+              <span style={{ fontSize: 11.5, color: T.mute }}>{picked.size} selected</span>
+              <span style={{ fontSize: 11.5, color: T.dimSolid }}>Move to…</span>
+              {Object.keys(groups).map(name => (
+                <button key={name} disabled={groupBusy}
+                  onClick={() => {
+                    const syms = [...picked];
+                    // Move out of whichever list currently holds each symbol.
+                    const from = Object.entries(groups).find(([g, list]) => g !== name && syms.some(s => list.includes(s)))?.[0];
+                    groupOp(() => from ? track.moveTo(from, name, syms.filter(s => groups[from].includes(s)))
+                                       : track.addTo(name, syms), `Moved ${syms.length} to ${name}.`);
+                  }}
+                  style={{ ...btn(), padding: "4px 9px", fontSize: 10.5 }}>{name}</button>
+              ))}
+              <button onClick={() => setPicked(new Set())} style={{ background: "none", border: "none", color: T.dimSolid, fontFamily: T.mono, fontSize: 10 }}>clear</button>
+            </div>
+          )}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {uniList.map(sym => (
-              <span key={sym} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: T.mono, fontSize: 11, color: T.mute, background: T.card, border: "1px solid " + T.line, borderRadius: 6, padding: "4px 6px 4px 8px" }}>
-                {sym}
-                {liveBackend && <button onClick={() => removeOne(sym)} disabled={uni.busy} title={"Remove " + sym}
-                  style={{ background: "none", border: "none", color: T.dimSolid, fontSize: 11, lineHeight: 1, padding: 0, opacity: uni.busy ? .4 : 1 }}>✕</button>}
-              </span>
-            ))}
+            {uniList.map(sym => {
+              const on = picked.has(sym);
+              const tags = groupsOf(sym);
+              return (
+                <span key={sym} title={tags.length ? "In: " + tags.join(", ") : undefined}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: T.mono, fontSize: 11,
+                    color: on ? T.ink : T.mute, background: on ? T.brassSoft : T.card,
+                    border: "1px solid " + (on ? T.brass + "66" : T.line), borderRadius: 6, padding: "4px 6px 4px 8px" }}>
+                  {liveBackend && groups
+                    ? <button onClick={() => setPicked(p => { const n = new Set(p); n.has(sym) ? n.delete(sym) : n.add(sym); return n; })}
+                        title="Select for Move to…" style={{ background: "none", border: "none", color: "inherit", font: "inherit", padding: 0 }}>{sym}</button>
+                    : sym}
+                  {tags.length > 0 && <span style={{ fontSize: 8, color: T.dimSolid }}>{tags.join("·")}</span>}
+                  {liveBackend && <button onClick={() => removeOne(sym)} disabled={uni.busy} title={"Remove " + sym}
+                    style={{ background: "none", border: "none", color: T.dimSolid, fontSize: 11, lineHeight: 1, padding: 0, opacity: uni.busy ? .4 : 1 }}>✕</button>}
+                </span>
+              );
+            })}
             {!uniList.length && <span style={{ fontSize: 11.5, color: T.dimSolid }}>Empty — add symbols or bulk-paste a list below.</span>}
           </div>
 
@@ -1457,6 +1691,18 @@ export default function Trinetra() {
           </div>
         </Drawer>;
       })()}
+
+      {/* track record — mounted only while open; it reads server-side history,
+          so the boundary keeps a bad record out of the screener */}
+      {panel === "track" && <Drawer wide title="Track Record" onClose={() => setPanel(null)}>
+        <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginTop: -6, marginBottom: 12 }}>
+          Did the signals work, did your picking beat them, and is any of it worth ₹2,000/month?
+          <span style={{ color: T.dimSolid }}> Built to disappoint — every number carries its sample size.</span>
+        </div>
+        <PraveshBoundary>
+          <TrackRecord backendUrl={backendUrl} live={liveBackend} />
+        </PraveshBoundary>
+      </Drawer>}
 
       {/* pravesh panel — mounted only while open, so the screener never pays for
           the IPO fetch, and a bad snapshot is contained by the boundary */}
