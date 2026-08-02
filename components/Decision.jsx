@@ -1,152 +1,164 @@
 "use client";
 import React, { useState } from "react";
+import { bandLabel, ladderOf, potentialText, pctText, rupee } from "../lib/desk";
 
 /* ================================================================
    THE DECISION SURFACE — potential, confidence, exit ladder.
 
-   Presentational only: every number arrives from the backend, which is
-   the only place an analog sample or a confidence component can be
-   computed honestly. What this file owns is the refusal to mis-state
-   them — a range never collapses to a single number, a score never
-   appears without its band and its breakdown, an exhausted setup and a
-   sub-1:1 rung are as loud as an attractive one.
+   Presentational only: every number arrives from the backend, the only
+   place an analog sample or a capped confidence score can be computed
+   honestly. What this file owns is the refusal to mis-state them.
 
-   Shapes: docs/FRONTEND_CONTRACT.md § 3.
+   The rules API.md calls non-optional, enforced here rather than left
+   to whoever writes the copy:
+     · potential is a range with its n, or it is not a number at all
+     · null potential (longterm) says why, instead of rendering blank
+     · insufficientHistory shows bounds and basis, never a made-up range
+     · exhausted leads, above the fold
+     · converged renders ONE target, not three identical ones
+     · a score never appears without its band and its caps
+     · sub-1:1 risk-reward is as loud as an attractive setup
    ================================================================ */
 
 const T = {
   bg: "#0E0F0C", card: "#1A1C13", raised: "#20221799",
   line: "#2A2D1F", lineSoft: "#22241A",
   ink: "#EAE7DB", mute: "#9C9F8B", dim: "#63665381", dimSolid: "#636653",
-  brass: "#C9A961", brassDeep: "#A8863F", brassSoft: "#C9A9611F",
-  green: "#86C08A", red: "#DC6A58", amber: "#D8B25C", blue: "#7FA6CE",
+  brass: "#C9A961", green: "#86C08A", red: "#DC6A58", amber: "#D8B25C", blue: "#7FA6CE",
   mono: "'IBM Plex Mono', ui-monospace, monospace",
   sans: "'Inter', ui-sans-serif, system-ui, sans-serif",
 };
+export const DECISION_T = T;
 
-const BAND_COLOR = { High: T.green, Moderate: T.brass, Low: T.amber, Speculative: T.red };
-const pct = (v, sign = true) => (v == null || Number.isNaN(+v) ? "—" : `${sign && +v > 0 ? "+" : ""}${(+v).toFixed(1)}%`);
-const rupee = v => (v == null ? "—" : "₹" + (+v).toLocaleString("en-IN", { maximumFractionDigits: 2 }));
+const BAND_COLOR = { high: T.green, moderate: T.brass, low: T.amber, speculative: T.red };
+const LEVEL_COLOR = { stop: T.red, safe: T.green, primary: T.brass, stretch: T.blue };
 
-/* ── confidence ────────────────────────────────────────────────────
-   The score is never the whole story: the band names it in words, and
-   the breakdown — including every cap the backend applied — is one tap
-   away. A bare 61 tells the user nothing about why. */
-export function ConfidenceDial({ confidence, compact }) {
+/* ── confidence ──────────────────────────────────────────────────── */
+export function ConfidenceDial({ confidence }) {
   const [open, setOpen] = useState(false);
   if (!confidence) return null;
-  const { score, band, components = [] } = confidence;
-  const colour = BAND_COLOR[band] || T.mute;
-  const caps = components.filter(c => c.cap);
+  const { score, band, components = [], caps = [], summary } = confidence;
+  const colour = BAND_COLOR[String(band).toLowerCase()] || T.mute;
 
   return (
-    <div style={{ minWidth: compact ? 0 : 150 }}>
-      <button onClick={() => setOpen(o => !o)}
-        title="Tap for the component breakdown"
+    <div style={{ minWidth: 168 }}>
+      <button onClick={() => setOpen(o => !o)} title="What makes up this score"
         style={{ all: "unset", cursor: "pointer", display: "block", width: "100%" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-          <span style={{ fontFamily: T.mono, fontSize: compact ? 12 : 14, color: colour }}>{score}</span>
-          <span style={{ fontSize: 11, color: colour }}>{band}</span>
-          <span style={{ fontFamily: T.mono, fontSize: 9, color: T.dimSolid, marginLeft: "auto" }}>
-            {open ? "hide ▴" : "why ▾"}
-          </span>
+          <span style={{ fontFamily: T.mono, fontSize: 14, color: colour }}>{score}</span>
+          <span style={{ fontSize: 11.5, color: colour }}>{bandLabel(band)}</span>
+          <span style={{ fontFamily: T.mono, fontSize: 9, color: T.dimSolid, marginLeft: "auto" }}>{open ? "hide ▴" : "why ▾"}</span>
         </div>
-        {/* the bar is decoration for the number, never a substitute for it */}
         <div style={{ height: 4, borderRadius: 3, background: T.lineSoft, marginTop: 5, overflow: "hidden" }}>
-          <div style={{ width: `${Math.max(0, Math.min(100, score))}%`, height: "100%", background: colour, opacity: .8 }} />
+          <div style={{ width: `${Math.max(0, Math.min(100, score))}%`, height: "100%", background: colour, opacity: .85 }} />
         </div>
-        {caps.length > 0 && !open && (
-          <div style={{ fontFamily: T.mono, fontSize: 9, color: T.amber, marginTop: 4 }}>⚑ {caps[0].cap}</div>
+        {/* A cap is why nothing ever scores high — it belongs beside the score,
+            not hidden behind the expander. */}
+        {caps.length > 0 && (
+          <div style={{ fontFamily: T.mono, fontSize: 9, color: T.amber, marginTop: 4, lineHeight: 1.5 }}>
+            ⚑ {caps.join(" · ")}
+          </div>
         )}
       </button>
 
       {open && (
         <div style={{ marginTop: 8, background: T.raised, border: "1px solid " + T.line, borderRadius: 8, padding: "9px 11px" }}>
-          <div style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1.2, color: T.dimSolid, marginBottom: 6 }}>
-            WHAT MAKES UP {score}
-          </div>
-          {components.map(c => (
-            <div key={c.label} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "3px 0" }}>
-              <span style={{ fontSize: 11.5, color: T.mute }}>{c.label}</span>
-              <span style={{ fontFamily: T.mono, fontSize: 11, color: c.contribution >= 0 ? T.green : T.red, whiteSpace: "nowrap" }}>
-                {c.contribution > 0 ? "+" : ""}{c.contribution}
-              </span>
+          <div style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1.2, color: T.dimSolid, marginBottom: 6 }}>WHAT MAKES UP {score}</div>
+          {components.map((c, i) => (
+            <div key={(c.name || i) + i} style={{ padding: "3px 0" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                <span style={{ fontSize: 11.5, color: T.mute }}>{c.name}</span>
+                <span style={{ fontFamily: T.mono, fontSize: 11, color: c.contribution >= 0 ? T.green : T.red, whiteSpace: "nowrap" }}>
+                  {c.contribution > 0 ? "+" : ""}{c.contribution}
+                </span>
+              </div>
+              {c.note && <div style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.5 }}>{c.note}</div>}
             </div>
           ))}
-          {caps.map(c => (
-            <div key={"cap" + c.label} style={{ fontSize: 10.5, color: T.amber, marginTop: 6, lineHeight: 1.5 }}>⚑ {c.cap}</div>
-          ))}
-          {!components.length && <div style={{ fontSize: 11, color: T.dimSolid }}>The backend sent no breakdown for this score.</div>}
+          {!components.length && <div style={{ fontSize: 11, color: T.dimSolid }}>No breakdown was sent for this score.</div>}
+          {summary && <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginTop: 7, borderTop: "1px solid " + T.lineSoft, paddingTop: 7 }}>{summary}</div>}
         </div>
       )}
     </div>
   );
 }
 
-/* ── potential ─────────────────────────────────────────────────────
-   Always a range, always with n, always hedged as an estimate. When the
-   backend says the history is too thin, no percentage is printed at all. */
-export function PotentialLine({ movedPct, potential }) {
-  if (!potential) return null;
-  const { lowPct, highPct, n, insufficientHistory, exhausted, basis } = potential;
+/* ── potential ───────────────────────────────────────────────────── */
+export function PotentialLine({ potential, horizon }) {
+  const p = potentialText(potential, horizon);
+  const moved = potential?.movedAlreadyPct;
+
   return (
     <div>
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
-        <span style={{ fontFamily: T.mono, fontSize: 12, color: movedPct >= 0 ? T.green : T.red }}>
-          moved {pct(movedPct)}
-        </span>
-        {insufficientHistory ? (
-          <span style={{ fontSize: 11.5, color: T.dimSolid }}>
-            not enough history to estimate — showing volatility bounds only
-          </span>
-        ) : (
-          <>
-            <span style={{ fontFamily: T.mono, fontSize: 12, color: T.ink }}>
-              est. {pct(lowPct)}–{pct(highPct, false)} remaining
-            </span>
-            <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid }}>
-              n={n ?? 0}{basis ? ` ${basis}` : " analogs"} · typical, not a target
-            </span>
-          </>
-        )}
-      </div>
-      {exhausted && (
-        <div style={{ marginTop: 7, background: T.amber + "14", border: "1px solid " + T.amber + "55",
+      {/* exhausted leads — the user must meet it before the numbers */}
+      {potential?.exhausted && (
+        <div style={{ marginBottom: 8, background: T.amber + "14", border: "1px solid " + T.amber + "55",
           borderLeft: "3px solid " + T.amber, borderRadius: 7, padding: "8px 11px", fontSize: 12, color: T.amber, lineHeight: 1.5 }}>
           This setup&apos;s typical move has already happened — little estimated upside remains.
         </div>
       )}
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
+        {moved != null && (
+          <span style={{ fontFamily: T.mono, fontSize: 12, color: moved >= 0 ? T.green : T.red }}>moved {pctText(moved)}</span>
+        )}
+        {p.kind === "range" ? (
+          <>
+            <span style={{ fontFamily: T.mono, fontSize: 12, color: T.ink }}>
+              est. {pctText(p.low)}–{pctText(p.high, false)} remaining
+            </span>
+            <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid }}>
+              n={p.n} analogs · typically, not a target
+            </span>
+          </>
+        ) : (
+          <span style={{ fontSize: 11.5, color: T.dimSolid, lineHeight: 1.5 }}>{p.text}</span>
+        )}
+      </div>
+
+      {p.kind === "thin" && p.bounds && (
+        <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.mute, marginTop: 4 }}>
+          volatility bounds {pctText(p.bounds.low)}–{pctText(p.bounds.high, false)}
+        </div>
+      )}
+      {(p.basis || potential?.basis) && (
+        <div style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.55, marginTop: 5 }}>{p.basis || potential.basis}</div>
+      )}
+      {potential?.cappedBy && (
+        <div style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid, marginTop: 3 }}>capped by {potential.cappedBy}</div>
+      )}
     </div>
   );
 }
 
-/* ── exit ladder ───────────────────────────────────────────────────
-   A scale from stop to stretch with the current price marked, so where a
-   position sits in its own range is obvious without reading numbers.
-   Sub-1:1 rungs are red: the app has to be as loud about a bad reward
-   for the risk as about a good one. */
-const LEVEL_COLOR = { stop: T.red, safe: T.green, primary: T.brass, stretch: T.blue };
-
-export function ExitLadder({ ladder, currentPrice, inline }) {
+/* ── exit ladder ─────────────────────────────────────────────────── */
+export function ExitLadder({ exits, currentPrice, inline }) {
   const [openRung, setOpenRung] = useState(null);
-  if (!ladder?.length) return null;
+  const rungs = ladderOf(exits);
+  if (!rungs.length) return null;
 
-  const prices = ladder.map(l => l.pricePoint).filter(Number.isFinite);
-  const lo = Math.min(...prices, currentPrice ?? Infinity);
-  const hi = Math.max(...prices, currentPrice ?? -Infinity);
+  const prices = rungs.map(r => r.price).filter(Number.isFinite);
+  const lo = Math.min(...prices, Number.isFinite(currentPrice) ? currentPrice : Infinity);
+  const hi = Math.max(...prices, Number.isFinite(currentPrice) ? currentPrice : -Infinity);
   const at = p => (hi === lo ? 50 : ((p - lo) / (hi - lo)) * 100);
 
   return (
-    <div style={{ marginTop: 10 }}>
-      <div style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1.2, color: T.dimSolid, marginBottom: 8 }}>EXIT LADDER</div>
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
+        <span style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1.2, color: T.dimSolid }}>EXIT LADDER</span>
+        {exits.converged && (
+          <span style={{ fontSize: 10.5, color: T.amber }}>
+            resistance sits close overhead — one target, not a choice of three
+          </span>
+        )}
+      </div>
 
-      {/* the scale */}
       <div style={{ position: "relative", height: 26, marginBottom: 10 }}>
         <div style={{ position: "absolute", top: 11, left: 0, right: 0, height: 2, background: T.lineSoft, borderRadius: 2 }} />
-        {ladder.map(l => (
-          <div key={l.level} title={`${l.level} · ${rupee(l.pricePoint)}`}
-            style={{ position: "absolute", top: 6, left: `calc(${at(l.pricePoint)}% - 4px)`, width: 8, height: 12,
-              borderRadius: 2, background: LEVEL_COLOR[l.level] || T.mute }} />
+        {rungs.map(r => (
+          <div key={r.key} title={`${r.label} · ${rupee(r.price)}`}
+            style={{ position: "absolute", top: 6, left: `calc(${at(r.price)}% - 4px)`, width: 8, height: 12, borderRadius: 2,
+              background: LEVEL_COLOR[r.key] || T.mute }} />
         ))}
         {Number.isFinite(currentPrice) && (
           <div title={`now ${rupee(currentPrice)}`}
@@ -154,66 +166,69 @@ export function ExitLadder({ ladder, currentPrice, inline }) {
         )}
       </div>
 
-      {/* the rungs */}
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        {ladder.map(l => {
-          const poor = l.rr != null && l.rr < 1;
-          const show = inline || openRung === l.level;
+        {rungs.map(r => {
+          const poor = r.rr != null && r.rr < 1;
+          const show = inline || openRung === r.key;
           return (
-            <div key={l.level} style={{ background: T.card, border: "1px solid " + (poor ? T.red + "44" : T.line), borderRadius: 8, padding: "8px 10px" }}>
-              <button onClick={() => setOpenRung(o => (o === l.level ? null : l.level))}
+            <div key={r.key} style={{ background: T.card, border: "1px solid " + (poor ? T.red + "55" : T.line), borderRadius: 8, padding: "8px 10px" }}>
+              <button onClick={() => setOpenRung(o => (o === r.key ? null : r.key))}
                 style={{ all: "unset", cursor: inline ? "default" : "pointer", width: "100%", display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-                <span style={{ fontFamily: T.mono, fontSize: 10, letterSpacing: 1, color: LEVEL_COLOR[l.level] || T.mute, minWidth: 54 }}>
-                  {String(l.level).toUpperCase()}
+                <span style={{ fontFamily: T.mono, fontSize: 10, letterSpacing: 1, color: LEVEL_COLOR[r.key] || T.mute, minWidth: 50 }}>
+                  {r.label.toUpperCase()}
                 </span>
-                <span style={{ fontFamily: T.mono, fontSize: 12, color: T.ink }}>{rupee(l.pricePoint)}</span>
-                <span style={{ fontFamily: T.mono, fontSize: 11, color: l.pct >= 0 ? T.green : T.red }}>{pct(l.pct)}</span>
+                <span style={{ fontFamily: T.mono, fontSize: 12, color: T.ink }}>{rupee(r.price)}</span>
+                <span style={{ fontFamily: T.mono, fontSize: 11, color: r.pct >= 0 ? T.green : T.red }}>{pctText(r.pct)}</span>
                 <span style={{ fontFamily: T.mono, fontSize: 10.5, color: poor ? T.red : T.dimSolid, marginLeft: "auto" }}>
-                  {l.rr == null ? "" : `R:R ${l.rr.toFixed(1)}${poor ? " · risk exceeds reward" : ""}`}
+                  {r.rr == null ? "" : `R:R ${(+r.rr).toFixed(1)}${poor ? " · risk exceeds reward" : ""}`}
                 </span>
-                {!inline && <span style={{ fontFamily: T.mono, fontSize: 9, color: T.dimSolid }}>{show ? "▴" : "▾"}</span>}
+                {!inline && r.rationale && <span style={{ fontFamily: T.mono, fontSize: 9, color: T.dimSolid }}>{show ? "▴" : "▾"}</span>}
               </button>
-              {show && l.rationale && (
-                <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginTop: 6 }}>{l.rationale}</div>
-              )}
+              {show && r.rationale && <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginTop: 6 }}>{r.rationale}</div>}
             </div>
           );
         })}
       </div>
+
+      {exits.riskRewardWarning && (
+        <div style={{ marginTop: 8, fontSize: 11.5, color: T.red, lineHeight: 1.5 }}>⚠ {exits.riskRewardWarning}</div>
+      )}
     </div>
   );
 }
 
-/* ── the whole strip ───────────────────────────────────────────────
-   What the user opens the app to read, in the order they need it. */
-export function DecisionStrip({ decision, currentPrice, inline }) {
-  if (!decision) return null;
-  const { movedPct, potential, confidence, ladder, suggestion, lagDisclosure } = decision;
+/* ── the strip ───────────────────────────────────────────────────── */
+export function DecisionStrip({ signal, currentPrice, inline }) {
+  if (!signal) return null;
+  const { potential, confidence, exits, horizon, lagDisclosure, eventWarning } = signal;
+
   return (
     <div style={{ fontFamily: T.sans }}>
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between" }}>
-        <div style={{ flex: "1 1 260px" }}><PotentialLine movedPct={movedPct} potential={potential} /></div>
+        <div style={{ flex: "1 1 250px" }}><PotentialLine potential={potential} horizon={horizon} /></div>
         <ConfidenceDial confidence={confidence} />
       </div>
 
-      {/* Delayed-feed lag is a line on the card, never a tooltip: a move
-          that already happened is the most expensive thing to miss. */}
+      {/* Verbatim, and on the card — not a tooltip. A move already gone is the
+          most expensive thing for a delayed feed to hide. */}
       {lagDisclosure && (
-        <div style={{ marginTop: 8, fontFamily: T.mono, fontSize: 10.5, color: T.amber }}>⏱ {lagDisclosure}</div>
+        <div style={{ marginTop: 9, fontSize: 11.5, color: T.amber, lineHeight: 1.55, background: T.amber + "0E",
+          border: "1px solid " + T.amber + "33", borderRadius: 7, padding: "7px 10px" }}>
+          ⏱ {lagDisclosure}
+        </div>
+      )}
+      {eventWarning && (
+        <div style={{ marginTop: 7, fontSize: 11.5, color: T.amber, lineHeight: 1.55 }}>⚠ {eventWarning}</div>
       )}
 
-      <ExitLadder ladder={ladder} currentPrice={currentPrice} inline={inline} />
+      <ExitLadder exits={exits} currentPrice={currentPrice} inline={inline} />
 
-      {suggestion && (
+      {exits?.suggestion && (
         <div style={{ marginTop: 10, background: T.raised, borderLeft: "3px solid " + T.brass, borderRadius: 7, padding: "10px 12px" }}>
-          <div style={{ fontSize: 12.5, color: T.mute, lineHeight: 1.65 }}>{suggestion}</div>
-          <div style={{ fontSize: 10.5, color: T.dimSolid, marginTop: 6 }}>
-            Decision support — not an instruction. The call is yours.
-          </div>
+          <div style={{ fontSize: 12.5, color: T.mute, lineHeight: 1.65 }}>{exits.suggestion}</div>
+          <div style={{ fontSize: 10.5, color: T.dimSolid, marginTop: 6 }}>Decision support — not an instruction. The call is yours.</div>
         </div>
       )}
     </div>
   );
 }
-
-export const DECISION_T = T;

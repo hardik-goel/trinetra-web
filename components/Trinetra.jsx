@@ -2,7 +2,11 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import PraveshPanel, { DoorGlyph } from "./PraveshPanel";
 import TrackRecord, { RecordGlyph } from "./TrackRecord";
+import Positions from "./Positions";
+import Brief from "./Brief";
+import { DecisionStrip } from "./Decision";
 import { trackApi } from "../lib/track";
+import { deskApi } from "../lib/desk";
 
 /* ================================================================
    TRINETRA — the eye opens when everything aligns
@@ -255,6 +259,10 @@ function StatusDot({ state }) {
 
 export default function Trinetra() {
   const [onboarded, setOnboarded] = useState(false);
+  /* The brief is the landing view on a weekday morning, because that is when it
+     is the only thing worth reading. It is a default, never a trap: the panel's
+     "Dashboard →" closes it and this never fires again in the session. */
+  const briefOffered = useRef(false);
   const [mode, setMode] = useState("demo"); // demo | live
   const [backendUrl, setBackendUrl] = useState(
     typeof process !== "undefined" && process.env.NEXT_PUBLIC_BACKEND_URL
@@ -303,6 +311,16 @@ export default function Trinetra() {
      what the engine scans, so a group is a view, never a second universe.
      Sort and filter live in component state on purpose: they are how you are
      looking right now, not a preference worth persisting. */
+  /* ── profiles ─────────────────────────────────────────────────────
+     The engine now evaluates four horizons independently; config.criteria is
+     no longer what it reads. Every snapshot row carries profileResults, so the
+     lock meters switch horizon without another request. */
+  const [profiles, setProfiles] = useState(null);
+  const [profileSel, setProfileSel] = useState("swing");   // or "ALL"
+  const [held, setHeld] = useState(() => new Set());       // symbols marked as holdings
+  const [events, setEvents] = useState({});                // { SYMBOL: { events: [...], stale, source } }
+  const [holdBusy, setHoldBusy] = useState("");
+
   const [groups, setGroups] = useState(null);           // { name: [symbols] } | null until read
   const [groupSel, setGroupSel] = useState("ALL");
   const [wlSort, setWlSort] = useState({ key: "criteria", dir: "desc" });
@@ -359,6 +377,43 @@ export default function Trinetra() {
      mutation from the server's own response — the API returns the whole map,
      so the UI never has to guess what the server ended up with. */
   const track = useMemo(() => (backendUrl ? trackApi(backendUrl) : null), [backendUrl]);
+  const desk = useMemo(() => (backendUrl ? deskApi(backendUrl) : null), [backendUrl]);
+
+  const loadProfiles = useCallback(async () => {
+    if (!desk) return;
+    try { const j = await desk.profiles(); setProfiles(j?.profiles || null); }
+    catch { /* older backend: the single-criteria editor keeps working */ }
+  }, [desk]);
+
+  const loadHeld = useCallback(async () => {
+    if (!desk) return;
+    try {
+      const j = await desk.holdings();
+      setHeld(new Set((j?.holdings || []).filter(h => h.status !== "closed").map(h => h.symbol)));
+    } catch { /* holdings are optional on older backends */ }
+  }, [desk]);
+
+  /* Scraped event dates. Absence means "could not establish", never "no event",
+     so a missing chip is never rendered as safety. */
+  const loadEvents = useCallback(async () => {
+    if (!desk) return;
+    try { const j = await desk.events(); setEvents(j?.events || {}); }
+    catch { /* optional surface */ }
+  }, [desk]);
+
+  useEffect(() => { if (liveBackend) { loadProfiles(); loadHeld(); loadEvents(); } },
+    [liveBackend, loadProfiles, loadHeld, loadEvents]);
+
+  /* One tap. No form, no modal, no confirmation — the user does not paper-trade
+     and will not fill anything in. Entry price and the locked criteria are
+     captured server-side from the snapshot. */
+  const markHolding = async (symbol) => {
+    if (!desk || held.has(symbol)) return;
+    setHoldBusy(symbol);
+    try { await desk.hold(symbol); setHeld(h => new Set([...h, symbol])); }
+    catch { /* surfaced by the Positions tab, which owns holding state */ }
+    finally { setHoldBusy(""); }
+  };
 
   const loadGroups = useCallback(async () => {
     if (!track) return;
@@ -585,6 +640,14 @@ export default function Trinetra() {
     setConn(c => ({ ...c, state: "error" })); return false;
   };
 
+  useEffect(() => {
+    if (briefOffered.current || !onboarded || !liveBackend) return;
+    briefOffered.current = true;
+    const ist = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const weekday = ist.getDay() >= 1 && ist.getDay() <= 5;
+    if (weekday && ist.getHours() < 11) setPanel("brief");
+  }, [onboarded, liveBackend]);
+
   // Auto-connect once if a backend URL was baked in via env (Vercel deploy).
   const autoTried = useRef(false);
   useEffect(() => {
@@ -679,9 +742,24 @@ export default function Trinetra() {
     ...fundColumns.map(k => [k, metricMeta(k).label]),
   ]), [fundColumns]);
 
+  /* Lock meters follow the selected profile. profileResults is computed by the
+     same engine server-side, so switching horizon does not re-evaluate anything
+     here — it reads a different answer to a different question. */
+  const evalFor = useCallback(s => {
+    const base = evaluate(s, criteria);
+    const pr = profileSel !== "ALL" ? s.profileResults?.[profileSel] : null;
+    if (!pr) return base;
+    return { ...base, criteria: pr.criteria || base.criteria, count: pr.count ?? base.count,
+             total: pr.total ?? base.total, locked: !!pr.locked };
+  }, [criteria, profileSel]);
+
+  /* In "All profiles" the row says which horizons currently satisfy it. */
+  const profilesSatisfied = useCallback(s =>
+    s.profilesLocked || Object.entries(s.profileResults || {}).filter(([, r]) => r?.locked).map(([id]) => id), []);
+
   const ranked = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const rows = stocks.map(s => ({ s, ev: evaluate(s, criteria), tags: groupsOf(s.symbol, s) }))
+    const rows = stocks.map(s => ({ s, ev: evalFor(s), tags: groupsOf(s.symbol, s), locks: profilesSatisfied(s) }))
       .filter(({ s, ev, tags }) => {
         if (q && !s.symbol.toLowerCase().includes(q) && !(s.name || "").toLowerCase().includes(q)) return false;
         if (groupSel !== "ALL" && !tags.includes(groupSel)) return false;
@@ -708,7 +786,7 @@ export default function Trinetra() {
       return sign * (av - bv) || (b.ev.volX || 0) - (a.ev.volX || 0);
     });
     return rows;
-  }, [stocks, criteria, query, groupSel, groupsOf, wlSort, wlFilter, firedToday]);
+  }, [stocks, criteria, query, groupSel, groupsOf, wlSort, wlFilter, firedToday, evalFor, profilesSatisfied]);
 
   const activeFilters = [
     groupSel !== "ALL" && ["group", groupSel, () => setGroupSel("ALL")],
@@ -850,6 +928,10 @@ export default function Trinetra() {
             <LedgerGlyph size={12} color={panel === "fundamentals" ? T.brass : T.mute} /> Fundamentals
             <span style={{ color: fundCrit?.enabled ? T.brass : T.dimSolid, fontFamily: T.mono }}>{fundChecks.length}</span>
           </button>
+          <button onClick={() => setPanel("brief")} style={chip(panel === "brief")}>☀ Brief</button>
+          <button onClick={() => setPanel("positions")} style={chip(panel === "positions")}>
+            ◱ Positions {held.size > 0 && <span style={{ color: T.brass, fontFamily: T.mono }}>{held.size}</span>}
+          </button>
           {/* Track Record — is any of this worth paying for. Server-backed. */}
           <button onClick={() => setPanel("track")} style={chip(panel === "track")}>
             <RecordGlyph size={12} color={panel === "track" ? T.brass : T.mute} /> Track Record
@@ -905,6 +987,37 @@ export default function Trinetra() {
             <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search" style={{ ...inS, fontFamily: T.sans, fontSize: 12, width: 130 }} />
           </div>
 
+          {/* profile switcher — four horizons, evaluated independently server-side.
+              Intraday is NOT gated: it runs on the delayed feed, because if the
+              estimated remaining move exceeds what has already gone, the tail is
+              still tradeable. The honesty mechanism is the confidence cap (55
+              intraday / 65 delayed) and the lag line on the card — greying the
+              chip would hide a feature that works. */}
+          {profiles && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
+              <button onClick={() => setProfileSel("ALL")} style={{ ...chip(profileSel === "ALL"), padding: "5px 10px", fontSize: 11.5 }}>
+                All profiles
+              </button>
+              {Object.entries(profiles).map(([id, p]) => (
+                <button key={id} onClick={() => setProfileSel(id)} disabled={p.enabled === false}
+                  title={p.enabled === false ? `${p.name || id} is switched off in its profile settings` : p.name}
+                  style={{ ...chip(profileSel === id), padding: "5px 10px", fontSize: 11.5, opacity: p.enabled === false ? .5 : 1 }}>
+                  {p.name || id}
+                  {(p.horizon === "intraday" || id === "intraday") && conn.delayed && (
+                    <span title="Runs on the delayed feed; confidence is capped at 55 for it" style={{ color: T.amber, fontFamily: T.mono, fontSize: 9 }}>⏱</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* Say what the cap is, where the horizon is chosen — not buried on a card. */}
+          {profiles && profileSel !== "ALL" && (profiles[profileSel]?.horizon === "intraday" || profileSel === "intraday") && conn.delayed && (
+            <div style={{ fontSize: 11, color: T.amber, marginBottom: 8, lineHeight: 1.5 }}>
+              ⏱ Intraday runs on the ~15-minute delayed feed. Signals still fire, and confidence is capped at 55 —
+              part of the move is already gone by the time you see it. Connecting Kite lifts the cap automatically.
+            </div>
+          )}
+
           {/* group selector — a slice of the same scan set, never a second universe */}
           {groups && Object.keys(groups).length > 0 && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
@@ -958,8 +1071,9 @@ export default function Trinetra() {
             </div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
-            {ranked.map(({ s, ev, tags }) => (
-              <button key={s.symbol} onClick={() => setDetail(s.symbol)}
+            {ranked.map(({ s, ev, tags, locks }) => (
+              <div key={s.symbol} style={{ display: "flex", flexDirection: "column" }}>
+              <button onClick={() => setDetail(s.symbol)}
                 style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderRadius: 10, padding: "11px 14px", textAlign: "left",
                   background: T.card, border: "1px solid " + (ev.locked ? T.brass + "55" : T.line), transition: "border-color .3s" }}>
                 <div style={{ minWidth: 0 }}>
@@ -970,6 +1084,22 @@ export default function Trinetra() {
                       <span key={t} style={{ fontFamily: T.mono, fontSize: 8, letterSpacing: .6, color: T.dimSolid,
                         border: "1px solid " + T.line, borderRadius: 4, padding: "1px 4px" }}>{t}</span>
                     ))}
+                    {profileSel === "ALL" && locks?.map(l => (
+                      <span key={l} title={`Locks on the ${l} profile`}
+                        style={{ fontFamily: T.mono, fontSize: 8, letterSpacing: .6, color: T.brass,
+                          border: "1px solid " + T.brass + "55", borderRadius: 4, padding: "1px 4px" }}>{l}</span>
+                    ))}
+                    {events?.[s.symbol]?.events?.[0] && (
+                      <span title={`${events[s.symbol].events[0].type} on ${events[s.symbol].events[0].date}`}
+                        style={{ fontFamily: T.mono, fontSize: 8, letterSpacing: .6, color: T.amber,
+                          border: "1px solid " + T.amber + "55", borderRadius: 4, padding: "1px 4px" }}>
+                        {events[s.symbol].events[0].type}
+                        {(() => { const e = events[s.symbol].events[0];
+                          const n = e.sessionsAway ?? e.daysAway;
+                          return n != null ? ` in ${n}${e.sessionsAway != null ? " sess" : "d"}` : ""; })()}
+                        {events[s.symbol].stale ? " ·stale" : ""}
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontFamily: T.mono, fontSize: 11, color: T.mute, marginTop: 2 }}>
                     ₹{fmtIN(s.price)}<span style={{ color: ev.dayChg >= 0 ? T.green : T.red, marginLeft: 7 }}>{ev.dayChg >= 0 ? "+" : ""}{ev.dayChg?.toFixed(1)}%</span>
@@ -981,6 +1111,17 @@ export default function Trinetra() {
                   <Eye ev={ev} s={9} />
                 </div>
               </button>
+              {liveBackend && (
+                <div style={{ marginTop: -6, marginBottom: 2, display: "flex", justifyContent: "flex-end" }}>
+                  {held.has(s.symbol)
+                    ? <span style={{ fontFamily: T.mono, fontSize: 9, color: T.green }}>✓ holding</span>
+                    : <button onClick={e => { e.stopPropagation(); markHolding(s.symbol); }} disabled={holdBusy === s.symbol}
+                        style={{ background: "none", border: "none", color: T.brass, fontFamily: T.mono, fontSize: 9.5, cursor: "pointer", padding: 0 }}>
+                        {holdBusy === s.symbol ? "marking…" : "+ I'm holding this"}
+                      </button>}
+                </div>
+              )}
+              </div>
             ))}
           </div>
         </section>
@@ -1085,6 +1226,18 @@ export default function Trinetra() {
 
       {/* criteria panel */}
       {panel === "criteria" && <Drawer title="Criteria" onClose={() => setPanel(null)}>
+        {/* The engine reads config.profiles now, not this flat list. Until the
+            editor is per-profile, saying so is the difference between "my edit
+            did nothing" and a known limitation. */}
+        {profiles && (
+          <div style={{ background: T.amber + "10", border: "1px solid " + T.amber + "44", borderRadius: 9,
+            padding: "10px 12px", marginBottom: 12, fontSize: 11.5, color: T.mute, lineHeight: 1.6 }}>
+            ⚠ The backend now evaluates <span style={{ color: T.ink }}>four profiles</span> ({Object.keys(profiles).join(", ")}),
+            each with its own criteria. This editor still edits the single legacy list, so changes here no longer drive the
+            server-side scan — switch horizons with the profile chips above the watchlist. A per-profile editor is the next
+            piece of work.
+          </div>
+        )}
         <div style={{ fontSize: 11.5, color: T.mute, marginBottom: 12, lineHeight: 1.55 }}>The eye opens only when every enabled criterion locks. Toggle, tune, or add your own. {mode === "live" && "Hit Sync in the feed panel to push changes to the backend."}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {criteria.filter(c => c.id !== "kron").map(c => (
@@ -1691,6 +1844,14 @@ export default function Trinetra() {
           </div>
         </Drawer>;
       })()}
+
+      {panel === "brief" && <Drawer wide title="Morning Brief" onClose={() => setPanel(null)}>
+        <PraveshBoundary><Brief backendUrl={backendUrl} live={liveBackend} onLeave={() => setPanel(null)} /></PraveshBoundary>
+      </Drawer>}
+
+      {panel === "positions" && <Drawer wide title="Positions" onClose={() => setPanel(null)}>
+        <PraveshBoundary><Positions backendUrl={backendUrl} live={liveBackend} /></PraveshBoundary>
+      </Drawer>}
 
       {/* track record — mounted only while open; it reads server-side history,
           so the boundary keeps a bad record out of the screener */}

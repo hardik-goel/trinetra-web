@@ -18,6 +18,46 @@ That's it. The app opens like any website — on your phone or laptop — and
 **auto-connects to your backend on load** (no pasting URLs). Add the site to
 your phone's home screen for an app-like icon.
 
+## Profiles, Brief and Positions
+
+**Profiles.** The backend evaluates four horizons independently — Intraday, Swing,
+Positional, Long term — and every snapshot row carries `profileResults` plus a flat
+`profilesLocked`. The chips above the watchlist switch which horizon the lock meters
+answer for; **All profiles** tags each row with the horizons it currently satisfies.
+
+Intraday is **not** gated. It runs on the ~15-minute delayed feed, because if the
+estimated remaining move exceeds what has already gone, the tail is still tradeable.
+The honesty mechanism is a hard confidence cap — 55 for intraday on a delayed feed,
+65 for anything else — carried in `confidence.caps` and rendered beside every score,
+plus the `lagDisclosure` sentence on the card. `PROVIDER=kite` lifts the cap
+automatically, with no code change. Greying the chip would hide a feature that works.
+
+> Known gap: the Criteria panel still edits the legacy flat list, which the engine no
+> longer reads (it reads `config.profiles`). The panel says so rather than letting an
+> edit quietly do nothing. A per-profile editor is the next piece of work.
+
+**Brief** (`☀ Brief`) is the landing view before 11:00 IST on weekdays, with
+`Dashboard →` as a one-tap escape that does not fire again in the session. It renders
+the server-assembled `/brief` in its given order — exit signals first, then new
+signals by profile, then IPOs, then events, then concentration — and never composes it
+locally. The data-health line (provider, delay, refresh age, missing symbols) sits at
+the top so a stale brief is never read as a live one.
+
+**Positions** (`◱ Positions`) leads with exit signals ordered by severity. Each card
+renders its `reasoning` sentence in full with the numbers behind it, the evidence strip
+(entry, now, trigger level, % from entry, days held), the suggested action and the note
+that the call is yours. Actions are **Mark closed** and **Dismiss this rule** — one rule
+for one holding, not the rule everywhere. Below sit open holdings with unrealised %,
+days held, the profile that triggered entry, and which rules are armed with the closest
+one's distance. Concentration bars, warnings and caveats follow, then capital and
+risk-per-trade.
+
+**One tap to hold.** Every watchlist row carries `+ I'm holding this`. It posts
+`{ symbol }` and nothing else — entry price, levels and the criteria locked at that
+moment are captured server-side, because "the reason you bought no longer holds" cannot
+be detected later without a record of what that reason was. Quantity, stop and target
+are optional and editable afterwards in Positions.
+
 ## Watchlist groups, filter and sort
 
 Above the watchlist sits a group selector — **All · Default · …** with counts.
