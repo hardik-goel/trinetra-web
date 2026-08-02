@@ -267,6 +267,10 @@ export default function Trinetra() {
   const [panel, setPanel] = useState(null);
   const [query, setQuery] = useState("");
   const [tg, setTg] = useState({ token: "", chatId: "", on: false, status: "" });
+  /* What the backend says about its Telegram channel: masked proof of
+     configuration, never the credentials. null until /config has been read. */
+  const [tgRemote, setTgRemote] = useState(null);
+  const [tgLoad, setTgLoad] = useState({ busy: false, err: "" });
   const [notifOn, setNotifOn] = useState(false);
   const [interval_, setInterval_] = useState(3);
   const alerted = useRef(new Set());
@@ -478,9 +482,53 @@ export default function Trinetra() {
     return () => clearInterval(id);
   }, [paused, interval_, fireAlerts]);
 
-  const pushConfig = async () => {
+  /* Credentials are only ever sent when the user actually typed them. The panel
+     never holds the real token — /config returns a mask — so posting the fields
+     unconditionally would push empty strings over a channel armed from the
+     server's environment and silently disarm it. The backend now refuses blank
+     and masked values, but the client must not depend on that: this app also
+     talks to older backends. No creds typed → the telegram block is omitted
+     entirely and the POST is a pure criteria sync. */
+  const typedTelegram = () => {
+    const token = tg.token.trim(), chatId = tg.chatId.trim();
+    if (!token && !chatId) return null;
+    return { on: tg.on, ...(token ? { token } : {}), ...(chatId ? { chatId } : {}) };
+  };
+
+  /* Read the armed state on demand rather than at startup: a panel that has
+     never been opened has no business asking the backend about credentials. */
+  const loadAlertConfig = useCallback(async () => {
     if (mode !== "live" || !backendUrl) return;
-    try { await fetch(backendUrl.replace(/\/$/, "") + "/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ criteria, alerts: { telegram: { on: tg.on, token: tg.token, chatId: tg.chatId } } }) }); } catch {}
+    setTgLoad({ busy: true, err: "" });
+    try {
+      const res = await fetch(backendUrl.replace(/\/$/, "") + "/config");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const j = await res.json();
+      // An older backend returns no telegram block at all — say "unknown"
+      // rather than render a confident "not armed" that may be false.
+      setTgRemote(j?.alerts?.telegram || null);
+      setTgLoad({ busy: false, err: j?.alerts?.telegram ? "" : "This backend does not report alert status." });
+    } catch (e) {
+      setTgRemote(null);
+      setTgLoad({ busy: false, err: "Could not read the backend's alert status — " + e.message });
+    }
+  }, [mode, backendUrl]);
+
+  useEffect(() => { if (panel === "alerts") loadAlertConfig(); }, [panel, loadAlertConfig]);
+
+  const pushConfig = async () => {
+    if (mode !== "live" || !backendUrl) return null;
+    const creds = typedTelegram();
+    try {
+      const res = await fetch(backendUrl.replace(/\/$/, "") + "/config", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ criteria, ...(creds ? { alerts: { telegram: creds } } : {}) }),
+      });
+      const j = await res.json().catch(() => null);
+      // The response carries the masked truth — adopt it rather than guess.
+      if (j?.config?.alerts?.telegram) setTgRemote(j.config.alerts.telegram);
+      return j;
+    } catch { return null; }
   };
 
   const connect = async () => {
@@ -507,7 +555,21 @@ export default function Trinetra() {
     .sort((a, b) => b.ev.count - a.ev.count || (b.ev.volX || 0) - (a.ev.volX || 0)), [stocks, criteria, query]);
 
   const askNotif = async () => { if ("Notification" in window) setNotifOn((await Notification.requestPermission()) === "granted"); };
-  const testTg = async () => { setTg(t => ({ ...t, status: "sending…" })); const ok = await tgSend(tg.token, tg.chatId, "✅ TRINETRA test — channel live."); setTg(t => ({ ...t, status: ok ? "Delivered" : "Failed — check token & chat id" })); };
+  const testTg = async () => { setTg(t => ({ ...t, status: "sending…" })); const ok = await tgSend(tg.token, tg.chatId, "✅ TRINETRA test — channel live."); setTg(t => ({ ...t, status: ok ? "Delivered from this browser" : "Failed — check token & chat id" })); };
+
+  /* Saving clears the inputs on success: holding a token in a text box after it
+     has been handed to the server is a credential sitting on screen for no
+     reason. The masked armed line is the receipt. */
+  const saveTelegram = async () => {
+    setTg(t => ({ ...t, status: "saving…" }));
+    const j = await pushConfig();
+    if (j?.config?.alerts?.telegram?.configured) {
+      setTg(t => ({ ...t, token: "", chatId: "", status: "Saved to backend" }));
+    } else {
+      setTg(t => ({ ...t, status: j ? "Backend did not confirm — check its logs" : "Could not reach the backend" }));
+      loadAlertConfig();
+    }
+  };
 
   const upCrit = (id, fn) => setCriteria(cs => cs.map(c => c.id === id ? fn(c) : c));
   const addCriterion = () => setCriteria(cs => [...cs, { id: "c" + Date.now(), key: "·", name: "New criterion", enabled: true, builtin: false, checks: [{ metric: "dayChgPct", op: "gte", value: 3 }] }]);
@@ -907,18 +969,72 @@ export default function Trinetra() {
             {notifOn ? "✓ Browser notifications on" : "Enable browser notifications"}
             <div style={{ fontSize: 10.5, color: T.dimSolid, marginTop: 3 }}>Fires while this tab is open.</div>
           </button>
-          <div style={{ border: "1px solid " + T.line, borderRadius: 10, padding: 14, background: T.card }}>
-            <div style={{ fontSize: 12.5, color: T.ink, marginBottom: 2, fontWeight: 500 }}>Telegram · 24/7</div>
-            <div style={{ fontSize: 10.5, color: T.dimSolid, marginBottom: 10, lineHeight: 1.5 }}>In live mode the backend sends these even with every tab closed. Create a bot via @BotFather.</div>
-            <input value={tg.token} onChange={e => setTg({ ...tg, token: e.target.value })} placeholder="Bot token" style={{ ...inS, width: "100%", marginBottom: 8 }} />
-            <input value={tg.chatId} onChange={e => setTg({ ...tg, chatId: e.target.value })} placeholder="Chat id" style={{ ...inS, width: "100%", marginBottom: 10 }} />
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <button onClick={() => { setTg(t => ({ ...t, on: !t.on })); }} style={pill(tg.on ? T.green : T.dimSolid)}>{tg.on ? "✓ Armed" : "Arm"}</button>
-              <button onClick={testTg} disabled={!tg.token || !tg.chatId} style={{ ...btn(), opacity: tg.token && tg.chatId ? 1 : .4 }}>Send test</button>
-              {mode === "live" && <button onClick={pushConfig} style={btn(true)}>Save to backend</button>}
-              <span style={{ fontSize: 10, color: T.dimSolid }}>{tg.status}</span>
-            </div>
-          </div>
+          {(() => {
+            const armed = !!tgRemote?.configured;
+            const typed = !!(tg.token.trim() && tg.chatId.trim());
+            const sourceLabel = tgRemote?.source === "env" ? "from environment"
+              : tgRemote?.source === "saved" ? "saved in backend" : "";
+            return <div style={{ border: "1px solid " + (armed ? T.green + "44" : T.line), borderRadius: 10, padding: 14, background: T.card }}>
+              <div style={{ fontSize: 12.5, color: T.ink, marginBottom: 2, fontWeight: 500 }}>Telegram · 24/7</div>
+              <div style={{ fontSize: 10.5, color: T.dimSolid, marginBottom: 10, lineHeight: 1.5 }}>In live mode the backend sends these even with every tab closed. Create a bot via @BotFather.</div>
+
+              {/* Armed state, straight from the backend. The panel cannot know the
+                  credentials — only that the server holds a pair that ends like this. */}
+              {mode === "live" && (
+                tgLoad.busy ? <div style={{ fontSize: 11.5, color: T.dimSolid, marginBottom: 10 }}>Reading backend alert status…</div>
+                : armed ? (
+                  <div style={{ background: T.green + "0E", border: "1px solid " + T.green + "33", borderRadius: 9, padding: "10px 12px", marginBottom: 10 }}>
+                    <div style={{ fontSize: 12.5, color: T.green, fontWeight: 600 }}>
+                      ✓ Alerts armed{tgRemote.on === false && <span style={{ color: T.amber, fontWeight: 400 }}> · sending paused</span>}
+                    </div>
+                    <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.mute, marginTop: 5, lineHeight: 1.6 }}>
+                      token {tgRemote.tokenMasked || "••••"} · chat {tgRemote.chatIdMasked || "••••"}
+                      {sourceLabel && <span style={{ color: T.dimSolid }}> · {sourceLabel}</span>}
+                    </div>
+                    <div style={{ fontSize: 10.5, color: T.dimSolid, marginTop: 6, lineHeight: 1.5 }}>
+                      The credentials stay on the server — this panel never receives them. Enter new values only to replace.
+                      {tgRemote.source === "env" && " Set from environment variables: change them there, not here."}
+                    </div>
+                  </div>
+                ) : tgLoad.err ? (
+                  <div style={{ background: T.brassSoft, border: "1px solid " + T.brass + "3A", borderRadius: 9, padding: "10px 12px", marginBottom: 10,
+                    fontSize: 11.5, color: T.mute, lineHeight: 1.5 }}>
+                    {tgLoad.err} Treat the armed state below as unknown.
+                    <button onClick={loadAlertConfig} style={{ ...btn(), marginTop: 8 }}>Retry</button>
+                  </div>
+                ) : tgRemote ? (
+                  <div style={{ fontSize: 11.5, color: T.dimSolid, marginBottom: 10, lineHeight: 1.5 }}>
+                    ○ Not armed on the backend — no bot token and chat id are stored there yet.
+                  </div>
+                ) : null
+              )}
+
+              <input value={tg.token} onChange={e => setTg({ ...tg, token: e.target.value })}
+                placeholder={armed ? "Bot token — leave empty to keep the stored one" : "Bot token"}
+                style={{ ...inS, width: "100%", marginBottom: 8 }} />
+              <input value={tg.chatId} onChange={e => setTg({ ...tg, chatId: e.target.value })}
+                placeholder={armed ? "Chat id — leave empty to keep the stored one" : "Chat id"}
+                style={{ ...inS, width: "100%", marginBottom: 10 }} />
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <button onClick={() => { setTg(t => ({ ...t, on: !t.on })); }} style={pill(tg.on ? T.green : T.dimSolid)}>{tg.on ? "✓ Armed" : "Arm"}</button>
+                <button onClick={testTg} disabled={!typed} title={typed ? "Sends from this browser, using the values typed above" : "Type a token and chat id — the test is sent from this browser"}
+                  style={{ ...btn(), opacity: typed ? 1 : .4 }}>Send test</button>
+                {mode === "live" && <button onClick={saveTelegram} disabled={!typed}
+                  title={typed ? undefined : "Nothing new to save — type a token and chat id to replace what the backend holds"}
+                  style={{ ...btn(true), opacity: typed ? 1 : .4 }}>Save to backend</button>}
+                <span style={{ fontSize: 10, color: /fail|Could not/i.test(tg.status) ? T.red : T.dimSolid }}>{tg.status}</span>
+              </div>
+
+              <div style={{ fontSize: 10.5, color: T.dimSolid, marginTop: 10, lineHeight: 1.55 }}>
+                {/* No server-side test endpoint exists, so say where the test comes from
+                    rather than let a delivered message imply the backend is wired. */}
+                <span style={{ color: T.mute }}>Send test</span> posts directly from this browser to Telegram using the values typed above —
+                it proves the bot and chat id work, not that the backend is armed. The armed line above is the backend&apos;s own answer.
+                {mode === "live" && <> The <span style={{ color: T.mute }}>Arm</span> switch takes effect on the backend only when saved together with new
+                  credentials; in demo mode it controls sending from this tab.</>}
+              </div>
+            </div>;
+          })()}
         </div>
       </Drawer>}
 
