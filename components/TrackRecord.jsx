@@ -348,54 +348,55 @@ function SignalsView({ signals, trades, onLog, assumptions, stats }) {
         Split by the exact set that locked. If a bigger combination does not show a better 7-day record here, the extra
         criterion is costing you signals without buying accuracy — on this sample.
       </div>
-      <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, padding: 6, overflowX: "auto", marginBottom: 16 }}>
-        <table>
-          <thead><tr>{["Combination", "Signals", "7d win", "7d avg", "30d win", "30d avg"].map((h, i) => (
-            <th key={h} style={th(i ? { textAlign: "right" } : {})}>{h.toUpperCase()}</th>))}</tr></thead>
-          <tbody>
-            {combos.map(c => {
-              const h7 = c.horizons.ret7d, h30 = c.horizons.ret30d;
-              const w7 = pctOrThin(h7.winRate, h7.n, MIN_SIGNALS), w30 = pctOrThin(h30.winRate, h30.n, MIN_SIGNALS);
-              return (
-                <tr key={c.combo}>
-                  <td style={td({ fontFamily: T.mono, fontSize: 11.5, color: T.ink })}>{c.combo} <span style={{ color: T.dimSolid }}>({c.count})</span></td>
-                  <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11 })}>{c.n}</td>
-                  <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 10.5, color: w7.thin ? T.dimSolid : T.ink })}>{w7.text}</td>
-                  <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: tone(h7.avg) })}>{signed(h7.avg)}</td>
-                  <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 10.5, color: w30.thin ? T.dimSolid : T.ink })}>{w30.text}</td>
-                  <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: tone(h30.avg) })}>{signed(h30.avg)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <div style={{ marginBottom: 16 }}>
+        <DataTable
+          dense
+          rowKey={r => r.combo}
+          rows={combos}
+          empty="No combinations yet."
+          columns={[
+            { key: "combo", label: "Combination", type: "text", align: "left", mono: false,
+              render: r => <span style={{ fontFamily: T.mono, color: T.ink }}>{r.combo} <span style={{ color: T.dimSolid }}>({r.count})</span></span> },
+            { key: "n", label: "Signals", type: "number" },
+            { key: "w7", label: "7d win", type: "number",
+              value: r => (r.horizons.ret7d.n >= MIN_SIGNALS ? r.horizons.ret7d.winRate : null),
+              render: r => { const h = r.horizons.ret7d, w = pctOrThin(h.winRate, h.n, MIN_SIGNALS);
+                return <span style={{ color: w.thin ? T.dimSolid : T.ink }}>{w.text}</span>; } },
+            { key: "a7", label: "7d avg", type: "number", value: r => r.horizons.ret7d.avg,
+              render: r => <span style={{ color: tone(r.horizons.ret7d.avg) }}>{signed(r.horizons.ret7d.avg)}</span> },
+            { key: "w30", label: "30d win", type: "number",
+              value: r => (r.horizons.ret30d.n >= MIN_SIGNALS ? r.horizons.ret30d.winRate : null),
+              render: r => { const h = r.horizons.ret30d, w = pctOrThin(h.winRate, h.n, MIN_SIGNALS);
+                return <span style={{ color: w.thin ? T.dimSolid : T.ink }}>{w.text}</span>; } },
+            { key: "a30", label: "30d avg", type: "number", value: r => r.horizons.ret30d.avg,
+              render: r => <span style={{ color: tone(r.horizons.ret30d.avg) }}>{signed(r.horizons.ret30d.avg)}</span> },
+          ]} />
       </div>
 
       <Label>By individual criterion — with it vs without it</Label>
-      <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, padding: 6, overflowX: "auto" }}>
-        <table>
-          <thead><tr>{["Criterion", "With · 7d avg", "n", "Without · 7d avg", "n", "Difference"].map((h, i) => (
-            <th key={h} style={th(i ? { textAlign: "right" } : {})}>{h.toUpperCase()}</th>))}</tr></thead>
-          <tbody>
-            {criteria.map(c => {
-              const a = c.with.ret7d, b = c.without.ret7d;
-              const diff = a.avg != null && b.avg != null ? Math.round((a.avg - b.avg) * 100) / 100 : null;
-              return (
-                <tr key={c.key}>
-                  <td style={td({ fontFamily: T.mono, fontSize: 11.5, color: T.ink })}>{c.key}</td>
-                  <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: tone(a.avg) })}>{signed(a.avg)}</td>
-                  <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 10, color: T.dimSolid })}>{a.n}</td>
-                  <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: tone(b.avg) })}>{signed(b.avg)}</td>
-                  <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 10, color: T.dimSolid })}>{b.n}</td>
-                  <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: tone(diff) })}>
-                    {diff == null ? "—" : signed(diff, 1, " pp")}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        dense
+        rowKey={r => r.key}
+        rows={criteria}
+        empty="No criteria to compare yet."
+        columns={[
+          { key: "key", label: "Criterion", type: "text", align: "left", mono: false,
+            render: r => <span style={{ fontFamily: T.mono, color: T.ink }}>{r.key}</span> },
+          { key: "withAvg", label: "With · 7d avg", type: "number", value: r => r.with.ret7d.avg,
+            render: r => <span style={{ color: tone(r.with.ret7d.avg) }}>{signed(r.with.ret7d.avg)}</span> },
+          { key: "withN", label: "n", type: "number", value: r => r.with.ret7d.n },
+          { key: "withoutAvg", label: "Without · 7d avg", type: "number", value: r => r.without.ret7d.avg,
+            render: r => <span style={{ color: tone(r.without.ret7d.avg) }}>{signed(r.without.ret7d.avg)}</span> },
+          { key: "withoutN", label: "n", type: "number", value: r => r.without.ret7d.n },
+          { key: "diff", label: "Difference", type: "number",
+            // Sorted on the signed gap: a criterion that hurts should sort to one end.
+            value: r => (r.with.ret7d.avg != null && r.without.ret7d.avg != null
+              ? Math.round((r.with.ret7d.avg - r.without.ret7d.avg) * 100) / 100 : null),
+            render: r => { const d = (r.with.ret7d.avg != null && r.without.ret7d.avg != null)
+                ? Math.round((r.with.ret7d.avg - r.without.ret7d.avg) * 100) / 100 : null;
+              return <span style={{ color: tone(d) }}>{d == null ? "—" : signed(d, 1, " pp")}</span>; } },
+        ]} />
+
       <div style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.55, marginTop: 10 }}>
         Differences on a handful of signals are noise. Nothing here is a significance test, and none of these splits
         adjusts for the market moving as a whole — a good week lifts every combination at once.
@@ -519,54 +520,52 @@ function PaperView({ trades, stats, draft, setDraft, onSubmit, onPatch, onDelete
       {[["Open positions", open, true], ["Closed trades", closed, false]].map(([title, rows, isOpen]) => (
         <div key={title} style={{ marginBottom: 16 }}>
           <Label>{title} · {rows.length}</Label>
-          {!rows.length
-            ? <div style={{ border: "1px dashed " + T.line, borderRadius: 10, padding: "16px 12px", textAlign: "center", fontSize: 12, color: T.dimSolid }}>
-                {isOpen ? "Nothing open." : "Nothing closed yet — a record starts when trades finish."}
-              </div>
-            : <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, padding: 6, overflowX: "auto" }}>
-                <table>
-                  <thead><tr>
-                    {(isOpen ? ["Symbol", "Entry", "Price", "Qty", "Stop/Target", "Mark", "Unrealised", "", ""]
-                             : ["Symbol", "Entry", "Exit", "Qty", "Reason", "Return", "Realised", "", ""]).map((h, i) => (
-                      <th key={h + i} style={th(i > 3 ? { textAlign: "right" } : {})}>{h.toUpperCase()}</th>))}
-                  </tr></thead>
-                  <tbody>
-                    {rows.map(t => (
-                      <React.Fragment key={t.id}>
-                        <tr>
-                          <td style={td({ fontFamily: T.mono, fontSize: 12, color: T.ink })} title={t.notes || undefined}>
-                            {t.symbol}{t.notes ? <span style={{ color: T.dimSolid }} title={t.notes}> ✎</span> : null}
-                          </td>
-                          <td style={td({ fontFamily: T.mono, fontSize: 10.5 })}>{shortDate(t.entryDate)} · {inr(t.entryPrice, 2)}</td>
-                          <td style={td({ fontFamily: T.mono, fontSize: 11 })}>
-                            {isOpen ? inr(t.entryPrice, 2) : `${shortDate(t.exitDate)} · ${inr(t.exitPrice, 2)}`}
-                          </td>
-                          <td style={td({ fontFamily: T.mono, fontSize: 11 })}>{t.qty}</td>
-                          <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 10.5 })}>
-                            {isOpen ? `${t.stopLoss != null ? inr(t.stopLoss, 2) : "—"} / ${t.target != null ? inr(t.target, 2) : "—"}` : (t.exitReason || "—")}
-                          </td>
-                          <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11 })}>
-                            {isOpen ? (t.mtm ? inr(t.mtm.price, 2) : "—") : <span style={{ color: tone(t.realisedPct) }}>{signed(t.realisedPct)}</span>}
-                          </td>
-                          <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: tone(isOpen ? t.mtm?.unrealisedPnl : t.realisedPnl) })}>
-                            {isOpen ? (t.mtm ? `${inr(t.mtm.unrealisedPnl)} (${signed(t.mtm.unrealisedPct)})` : "unmarked") : inr(t.realisedPnl)}
-                          </td>
-                          <td style={td({ textAlign: "right", whiteSpace: "nowrap" })}>
-                            {isOpen && <button onClick={() => setClosing(closing === t.id ? null : t.id)} style={{ ...btn(), padding: "4px 8px", fontSize: 10 }}>Close</button>}
-                            {isOpen && t.mtm?.stopHit && <span title="Price is at or below your stop" style={{ color: T.red, marginLeft: 6 }}>⚠</span>}
-                            {isOpen && t.mtm?.targetHit && <span title="Price is at or above your target" style={{ color: T.green, marginLeft: 6 }}>◎</span>}
-                          </td>
-                          <td style={td({ textAlign: "right" })}>
-                            <button onClick={() => onDelete(t.id)} title="Delete this record" style={{ background: "none", border: "none", color: T.dimSolid, fontSize: 11 }}>✕</button>
-                          </td>
-                        </tr>
-                        {closing === t.id && <CloseForm trade={t} busy={busy} onCancel={() => setClosing(null)}
-                          onClose={patch => { onPatch(t.id, patch); setClosing(null); }} />}
-                      </React.Fragment>
-                    ))}
-                  </tbody>
-                </table>
-              </div>}
+          <DataTable
+            dense
+            rowKey={t => t.id}
+            rows={rows}
+            expanded={closing}
+            empty={isOpen ? "Nothing open." : "Nothing closed yet — a record starts when trades finish."}
+            renderExpanded={t => (
+              <CloseForm trade={t} busy={busy} onCancel={() => setClosing(null)}
+                onClose={patch => { onPatch(t.id, patch); setClosing(null); }} />
+            )}
+            columns={[
+              { key: "symbol", label: "Symbol", type: "text", align: "left", mono: false,
+                render: t => <span style={{ fontFamily: T.mono, color: T.ink }} title={t.notes || undefined}>
+                  {t.symbol}{t.notes ? <span style={{ color: T.dimSolid }}> ✎</span> : null}</span> },
+              { key: "entryDate", label: "Entry", type: "date",
+                render: t => `${shortDate(t.entryDate)} · ${inr(t.entryPrice, 2)}` },
+              isOpen
+                ? { key: "mark", label: "Mark", type: "number", value: t => t.mtm?.price,
+                    render: t => (t.mtm ? inr(t.mtm.price, 2) : "—") }
+                : { key: "exitDate", label: "Exit", type: "date",
+                    render: t => `${shortDate(t.exitDate)} · ${inr(t.exitPrice, 2)}` },
+              { key: "qty", label: "Qty", type: "number" },
+              isOpen
+                ? { key: "stopTarget", label: "Stop / target", type: "text", sortable: false,
+                    value: t => t.stopLoss, render: t => `${t.stopLoss != null ? inr(t.stopLoss, 2) : "—"} / ${t.target != null ? inr(t.target, 2) : "—"}` }
+                : { key: "exitReason", label: "Reason", type: "cat", value: t => t.exitReason || "—" },
+              isOpen
+                ? { key: "unrealised", label: "Unrealised", type: "number", value: t => t.mtm?.unrealisedPnl,
+                    render: t => <span style={{ color: tone(t.mtm?.unrealisedPnl) }}>
+                      {t.mtm ? `${inr(t.mtm.unrealisedPnl)} (${signed(t.mtm.unrealisedPct)})` : "unmarked"}</span> }
+                : { key: "realisedPct", label: "Return", type: "number",
+                    render: t => <span style={{ color: tone(t.realisedPct) }}>{signed(t.realisedPct)}</span> },
+              isOpen
+                ? { key: "flags", label: "", type: "text", sortable: false, filterable: false, value: () => "",
+                    render: t => <span style={{ whiteSpace: "nowrap" }}>
+                      <button onClick={e => { e.stopPropagation(); setClosing(closing === t.id ? null : t.id); }}
+                        style={{ padding: "4px 8px", fontSize: 10, borderRadius: 6, border: "1px solid " + T.line, background: "transparent", color: T.mute, cursor: "pointer" }}>Close</button>
+                      {t.mtm?.stopHit && <span title="Price is at or below your stop" style={{ color: T.red, marginLeft: 6 }}>⚠</span>}
+                      {t.mtm?.targetHit && <span title="Price is at or above your target" style={{ color: T.green, marginLeft: 6 }}>◎</span>}
+                    </span> }
+                : { key: "realisedPnl", label: "Realised", type: "number",
+                    render: t => <span style={{ color: tone(t.realisedPnl) }}>{inr(t.realisedPnl)}</span> },
+              { key: "del", label: "", type: "text", sortable: false, filterable: false, value: () => "",
+                render: t => <button onClick={e => { e.stopPropagation(); onDelete(t.id); }}
+                  style={{ background: "none", border: "none", color: T.dimSolid, fontSize: 11, cursor: "pointer" }}>✕</button> },
+            ]} />
         </div>
       ))}
 
@@ -621,35 +620,35 @@ function IpoView({ pravesh, apps, stats, onApply, onPatch, onDelete, busy, range
 
       <Label>What the engine suggested in this range</Label>
       {!pravesh && <div style={{ fontSize: 11.5, color: T.dimSolid, marginBottom: 10 }}>Pravesh feed unreachable — showing only what you logged.</div>}
-      <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, padding: 6, overflowX: "auto", marginBottom: 16 }}>
-        <table>
-          <thead><tr>{["IPO", "Verdict then", "Closed / listed", "Listing gain", "You"].map((h, i) => (
-            <th key={h} style={th(i > 2 ? { textAlign: "right" } : {})}>{h.toUpperCase()}</th>))}</tr></thead>
-          <tbody>
-            {!suggested.length && <tr><td colSpan={5} style={td({ textAlign: "center", padding: "18px 8px", color: T.dimSolid })}>
-              No IPOs in this range.</td></tr>}
-            {suggested.map(i => {
-              const app = appByName[(i.name || "").toLowerCase()];
-              return (
-                <tr key={i.slug || i.name}>
-                  <td style={td({ fontSize: 12.5, color: T.ink })}>{i.name}
-                    {i.segment === "SME" && <span style={{ fontFamily: T.mono, fontSize: 8.5, color: T.amber, marginLeft: 6 }}>SME</span>}</td>
-                  <td style={td({ fontFamily: T.mono, fontSize: 10.5, color: T.brass })}>{i.take?.verdict_key || "—"}</td>
-                  <td style={td({ fontFamily: T.mono, fontSize: 10.5 })}>{shortDate(i.close_date || i.listing_date)}</td>
-                  <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: tone(i.listing_gain_pct) })}>
-                    {i.listing_gain_pct == null ? "—" : signed(i.listing_gain_pct)}
-                  </td>
-                  <td style={td({ textAlign: "right", whiteSpace: "nowrap" })}>
-                    {app
-                      ? <span style={{ fontFamily: T.mono, fontSize: 10, color: T.green }}>✓ applied</span>
-                      : <button onClick={() => setDraft({ ipoName: i.name, verdictAtApply: i.take?.verdict_key || "", segment: i.segment || null, lots: 1, amount: "", appliedDate: dayISO(new Date()) })}
-                          style={{ ...btn(), padding: "4px 8px", fontSize: 10, borderColor: T.brass + "44", color: T.brass }}>Did you apply?</button>}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <div style={{ marginBottom: 16 }}>
+        <DataTable
+          dense
+          rowKey={r => r.slug || r.name}
+          rows={suggested}
+          empty="No IPOs in this range."
+          columns={[
+            { key: "name", label: "IPO", type: "text", align: "left", mono: false,
+              render: r => <span style={{ color: T.ink }}>{r.name}
+                {r.segment === "SME" && <span style={{ fontFamily: T.mono, fontSize: 8.5, color: T.amber, marginLeft: 6 }}>SME</span>}</span> },
+            { key: "verdict", label: "Verdict then", type: "cat",
+              value: r => r.take?.verdict_key || "—",
+              render: r => <span style={{ color: T.brass }}>{r.take?.verdict_key || "—"}</span> },
+            { key: "when", label: "Closed / listed", type: "date",
+              value: r => r.close_date || r.listing_date,
+              render: r => shortDate(r.close_date || r.listing_date) },
+            { key: "listing_gain_pct", label: "Listing gain", type: "number",
+              render: r => <span style={{ color: tone(r.listing_gain_pct) }}>
+                {r.listing_gain_pct == null ? "—" : signed(r.listing_gain_pct)}</span> },
+            { key: "you", label: "You", type: "bool", sortable: false, filterable: false,
+              value: r => !!appByName[(r.name || "").toLowerCase()],
+              render: r => appByName[(r.name || "").toLowerCase()]
+                ? <span style={{ fontFamily: T.mono, fontSize: 10, color: T.green }}>✓ applied</span>
+                : <button onClick={e => { e.stopPropagation();
+                    setDraft({ ipoName: r.name, verdictAtApply: r.take?.verdict_key || "", segment: r.segment || null,
+                      lots: 1, amount: "", appliedDate: dayISO(new Date()) }); }}
+                    style={{ padding: "4px 8px", fontSize: 10, borderRadius: 6, border: "1px solid " + T.brass + "44",
+                      background: "transparent", color: T.brass, cursor: "pointer" }}>Did you apply?</button> },
+          ]} />
       </div>
 
       {draft && (
@@ -666,43 +665,40 @@ function IpoView({ pravesh, apps, stats, onApply, onPatch, onDelete, busy, range
       )}
 
       <Label>Your applications</Label>
-      <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, padding: 6, overflowX: "auto" }}>
-        <table>
-          <thead><tr>{["IPO", "Applied", "Lots", "Amount", "Allotted?", "Listing gain", ""].map((h, i) => (
-            <th key={h} style={th(i > 2 ? { textAlign: "right" } : {})}>{h.toUpperCase()}</th>))}</tr></thead>
-          <tbody>
-            {!apps.length && <tr><td colSpan={7} style={td({ textAlign: "center", padding: "18px 8px", color: T.dimSolid })}>
-              Nothing logged yet. Record applications as you make them — reconstructing them later is how a track record becomes fiction.</td></tr>}
-            {apps.map(a => (
-              <tr key={a.id}>
-                <td style={td({ fontSize: 12.5, color: T.ink })}>{a.ipoName}
-                  {a.verdictAtApply && <span style={{ fontFamily: T.mono, fontSize: 9, color: T.brass, marginLeft: 6 }}>{a.verdictAtApply}</span>}</td>
-                <td style={td({ fontFamily: T.mono, fontSize: 10.5 })}>{shortDate(a.appliedDate)}</td>
-                <td style={td({ fontFamily: T.mono, fontSize: 11 })}>{a.lots ?? "—"}</td>
-                <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11 })}>{inr(a.amount)}</td>
-                <td style={td({ textAlign: "right", whiteSpace: "nowrap" })}>
-                  {a.allotted == null
-                    ? <span style={{ display: "inline-flex", gap: 4 }}>
-                        <button onClick={() => onPatch(a.id, { allotted: true })} style={{ ...btn(), padding: "3px 7px", fontSize: 10 }}>yes</button>
-                        <button onClick={() => onPatch(a.id, { allotted: false })} style={{ ...btn(), padding: "3px 7px", fontSize: 10 }}>no</button>
-                      </span>
-                    : <span style={{ fontFamily: T.mono, fontSize: 10.5, color: a.allotted ? T.green : T.dimSolid }}>{a.allotted ? "allotted" : "not allotted"}</span>}
-                </td>
-                <td style={td({ textAlign: "right" })}>
-                  {a.allotted
-                    ? <input type="number" step="any" defaultValue={a.listingGainPct ?? ""} placeholder="% gain"
-                        onBlur={e => e.target.value !== "" && onPatch(a.id, { listingGainPct: +e.target.value })}
-                        style={{ ...inS, width: 80, textAlign: "right" }} />
-                    : <span style={{ color: T.dimSolid, fontFamily: T.mono, fontSize: 10.5 }}>—</span>}
-                </td>
-                <td style={td({ textAlign: "right" })}>
-                  <button onClick={() => onDelete(a.id)} style={{ background: "none", border: "none", color: T.dimSolid, fontSize: 11 }}>✕</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        dense
+        rowKey={r => r.id}
+        rows={apps}
+        empty="Nothing logged yet. Record applications as you make them — reconstructing them later is how a track record becomes fiction."
+        columns={[
+          { key: "ipoName", label: "IPO", type: "text", align: "left", mono: false,
+            render: r => <span style={{ color: T.ink }}>{r.ipoName}
+              {r.verdictAtApply && <span style={{ fontFamily: T.mono, fontSize: 9, color: T.brass, marginLeft: 6 }}>{r.verdictAtApply}</span>}</span> },
+          { key: "appliedDate", label: "Applied", type: "date", render: r => shortDate(r.appliedDate) },
+          { key: "lots", label: "Lots", type: "number" },
+          { key: "amount", label: "Amount", type: "number", render: r => inr(r.amount) },
+          { key: "allotted", label: "Allotted?", type: "bool", sortable: false,
+            render: r => r.allotted == null
+              ? <span style={{ display: "inline-flex", gap: 4 }}>
+                  <button onClick={e => { e.stopPropagation(); onPatch(r.id, { allotted: true }); }}
+                    style={{ padding: "3px 7px", fontSize: 10, borderRadius: 6, border: "1px solid " + T.line, background: "transparent", color: T.mute, cursor: "pointer" }}>yes</button>
+                  <button onClick={e => { e.stopPropagation(); onPatch(r.id, { allotted: false }); }}
+                    style={{ padding: "3px 7px", fontSize: 10, borderRadius: 6, border: "1px solid " + T.line, background: "transparent", color: T.mute, cursor: "pointer" }}>no</button>
+                </span>
+              : <span style={{ color: r.allotted ? T.green : T.dimSolid }}>{r.allotted ? "allotted" : "not allotted"}</span> },
+          { key: "listingGainPct", label: "Listing gain", type: "number",
+            render: r => r.allotted
+              ? <input type="number" step="any" defaultValue={r.listingGainPct ?? ""} placeholder="% gain"
+                  onClick={e => e.stopPropagation()}
+                  onBlur={e => e.target.value !== "" && onPatch(r.id, { listingGainPct: +e.target.value })}
+                  style={{ background: T.bg, border: "1px solid " + T.line, color: T.ink, fontFamily: T.mono,
+                    fontSize: 11, borderRadius: 6, padding: "4px 6px", width: 80, textAlign: "right" }} />
+              : <span style={{ color: T.dimSolid }}>—</span> },
+          { key: "del", label: "", type: "text", sortable: false, filterable: false, value: () => "",
+            render: r => <button onClick={e => { e.stopPropagation(); onDelete(r.id); }}
+              style={{ background: "none", border: "none", color: T.dimSolid, fontSize: 11, cursor: "pointer" }}>✕</button> },
+        ]} />
+
       {stats?.assumptions?.length > 0 && (
         <div style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.7, marginTop: 10 }}>
           {stats.assumptions.map(a => <div key={a}>· {a}</div>)}
