@@ -322,6 +322,8 @@ export default function Trinetra() {
      no longer what it reads. Every snapshot row carries profileResults, so the
      lock meters switch horizon without another request. */
   const [profiles, setProfiles] = useState(null);
+  const [canonicalState, setCanonicalState] = useState({ matches: true, canonical: null });
+  const [restoring, setRestoring] = useState(false);
   const [profileSel, setProfileSel] = useState("swing");   // or "ALL"
   const [held, setHeld] = useState(() => new Set());       // symbols marked as holdings
   const [events, setEvents] = useState({});                // { SYMBOL: { events: [...], stale, source } }
@@ -387,7 +389,11 @@ export default function Trinetra() {
 
   const loadProfiles = useCallback(async () => {
     if (!desk) return;
-    try { const j = await desk.profiles(); setProfiles(j?.profiles || null); }
+    try {
+      const j = await desk.profiles();
+      setProfiles(j?.profiles || null);
+      setCanonicalState({ matches: j?.matchesCanonical !== false, canonical: j?.canonical || null });
+    }
     catch { /* older backend: the single-criteria editor keeps working */ }
   }, [desk]);
 
@@ -909,6 +915,24 @@ export default function Trinetra() {
       </header>
 
       <main style={{ maxWidth: 860, margin: "0 auto", padding: "0 16px 80px" }}>
+        {/* The three criteria are the point of the instrument. If the active set
+            has drifted, say so where it cannot be missed — and make going back
+            one tap. Never silently overwrite what the user chose. */}
+        {liveBackend && profiles && canonicalState.matches === false && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 14,
+            background: T.brassSoft, border: "1px solid " + T.brass + "3A", borderRadius: 9, padding: "9px 12px" }}>
+            <span style={{ fontSize: 12, color: T.mute, lineHeight: 1.5 }}>
+              Your criteria differ from the default three — fundamentals, breakout, volume shocker.
+            </span>
+            <button disabled={restoring} style={{ ...btn(true), marginLeft: "auto" }}
+              onClick={async () => {
+                setRestoring(true);
+                try { await desk.restoreDefaults(profileSel === "ALL" ? "swing" : profileSel); await loadProfiles(); }
+                finally { setRestoring(false); }
+              }}>{restoring ? "Restoring…" : "Restore defaults"}</button>
+          </div>
+        )}
+
         {/* action strip */}
         <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
           <button onClick={() => setPanel("criteria")} style={chip(true)}>
@@ -948,6 +972,15 @@ export default function Trinetra() {
 
         {/* signals */}
         <section style={{ marginTop: 22 }}>
+          {(() => {
+            const warn = [...new Set(stocks.flatMap(s => (s.profileResults?.[profileSel === "ALL" ? "swing" : profileSel]?.warnings) || []))];
+            return warn.length ? (
+              <div style={{ background: T.amber + "10", border: "1px solid " + T.amber + "44", borderRadius: 9,
+                padding: "9px 12px", marginBottom: 10, fontSize: 11.5, color: T.amber, lineHeight: 1.55 }}>
+                {warn.map(w => <div key={w}>⚠ {w}</div>)}
+              </div>
+            ) : null;
+          })()}
           <SectionLabel>Signals — the eye is open</SectionLabel>
           {signals.length === 0 ? (
             <div style={{ border: "1px dashed " + T.line, borderRadius: 12, padding: "28px 20px", textAlign: "center" }}>
@@ -1105,6 +1138,12 @@ export default function Trinetra() {
                   </div>
                   <div style={{ fontFamily: T.mono, fontSize: 11, color: T.mute, marginTop: 2 }}>
                     ₹{fmtIN(s.price)}<span style={{ color: ev.dayChg >= 0 ? T.green : T.red, marginLeft: 7 }}>{ev.dayChg >= 0 ? "+" : ""}{ev.dayChg?.toFixed(1)}%</span>
+                    {s.volPaceMultiple != null && (
+                      <span title={`raw ${s.volumeRawMultiple}× so far, paced to a full session`}
+                        style={{ color: T.dimSolid, marginLeft: 7 }}>
+                        · {(+s.volPaceMultiple).toFixed(1)}× pace{s.volumeIsPartial && s.sessionFraction != null ? ` (${Math.round(s.sessionFraction * 100)}% of session)` : ""}
+                      </span>
+                    )}
                   </div>
                   {(() => {
                     const d = profileSel !== "ALL" ? s.decisions?.[profileSel] : null;
@@ -1258,6 +1297,21 @@ export default function Trinetra() {
 
       {/* criteria panel */}
       {panel === "criteria" && <Drawer title="Criteria" onClose={() => setPanel(null)}>
+        {profiles && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            <span style={{ fontSize: 11.5, color: canonicalState.matches ? T.dimSolid : T.amber, lineHeight: 1.5 }}>
+              {canonicalState.matches
+                ? "Matches the default three — fundamentals, breakout, volume shocker."
+                : "Differs from the default three."}
+            </span>
+            <button disabled={restoring} style={{ ...btn(), marginLeft: "auto" }}
+              onClick={async () => {
+                setRestoring(true);
+                try { await desk.restoreDefaults(profileSel === "ALL" ? "swing" : profileSel); await loadProfiles(); }
+                finally { setRestoring(false); }
+              }}>{restoring ? "Restoring…" : "Restore default criteria"}</button>
+          </div>
+        )}
         {profiles ? (
           <ProfileCriteria backendUrl={backendUrl} profiles={profiles}
             metricOptions={[...new Set([...Object.keys(METRICS), ...fundColumns])]}
