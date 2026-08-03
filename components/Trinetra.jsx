@@ -262,7 +262,7 @@ function StatusDot({ state }) {
 }
 
 export default function Trinetra() {
-  const [onboarded, setOnboarded] = useState(false);
+  const [onboarded, setOnboarded] = useState(true);   // no landing gate — see the About panel
   /* The brief is the landing view on a weekday morning, because that is when it
      is the only thing worth reading. It is a default, never a trap: the panel's
      "Dashboard →" closes it and this never fires again in the session. */
@@ -273,7 +273,8 @@ export default function Trinetra() {
       ? process.env.NEXT_PUBLIC_BACKEND_URL : ""
   );
   const [conn, setConn] = useState({ state: "idle", lastSync: null, delayed: true, provider: "" });
-  const [stocks, setStocks] = useState(makeUniverse);
+  const [stocks, setStocks] = useState([]);
+  useEffect(() => { setStocks(prev => (prev.length ? prev : makeUniverse())); }, []);
   const [criteria, setCriteria] = useState(DEFAULT_CRITERIA);
   const [signals, setSignals] = useState([]);
   const [paused, setPaused] = useState(false);
@@ -874,38 +875,9 @@ export default function Trinetra() {
     @media (prefers-reduced-motion: reduce) { .rise, [style*=breathe], [style*=irisIn] { animation: none !important; } }
   `;
 
-  /* ── onboarding ── */
-  if (!onboarded) {
-    return (
-      <div style={{ minHeight: "100vh", background: T.bg, color: T.ink, fontFamily: T.sans, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-        <style dangerouslySetInnerHTML={{ __html: css }} />
-        <div className="rise" style={{ maxWidth: 440, width: "100%", textAlign: "center" }}>
-          <div style={{ width: 64, height: 64, margin: "0 auto 20px", borderRadius: 99, border: "1px solid " + T.brass + "66", display: "flex", alignItems: "center", justifyContent: "center", animation: "irisIn .8s cubic-bezier(.2,.8,.2,1)" }}>
-            <div style={{ width: 26, height: 26, borderRadius: 99, background: "radial-gradient(circle at 50% 45%, " + T.brass + ", " + T.brassDeep + ")", boxShadow: "0 0 18px " + T.brass + "77" }} />
-          </div>
-          <h1 style={{ fontFamily: T.serif, fontSize: 44, lineHeight: 1, margin: "0 0 6px", fontWeight: 400 }}>Trinetra</h1>
-          <p style={{ fontFamily: T.mono, fontSize: 10, letterSpacing: 3, color: T.brass, margin: "0 0 24px" }}>THE EYE OPENS WHEN EVERYTHING ALIGNS</p>
-          <p style={{ fontSize: 14, color: T.mute, lineHeight: 1.65, margin: "0 0 28px" }}>
-            A vigilance instrument for NSE swing setups. It watches your universe and stays silent until a stock satisfies <em style={{ color: T.ink, fontStyle: "normal" }}>every</em> criterion you set — fundamentals, breakout, volume, order flow — then it opens, and tells you.
-          </p>
-          <div style={{ textAlign: "left", background: T.card, border: "1px solid " + T.line, borderRadius: 12, padding: 18, marginBottom: 20 }}>
-            {[["Explore now", "Start on the demo feed — simulated ticks to learn the instrument and tune your criteria, risk-free."],
-              ["Go live, free", "Deploy the backend (10 min) for real delayed NSE data and 24/7 Telegram alerts."],
-              ["Upgrade later", "Connect Zerodha Kite for live ticks + real order-flow, when the setup has proven itself."]].map(([h, b], i) => (
-              <div key={h} style={{ display: "flex", gap: 12, padding: "8px 0", borderBottom: i < 2 ? "1px solid " + T.lineSoft : "none" }}>
-                <span style={{ fontFamily: T.mono, fontSize: 11, color: T.brass, marginTop: 1 }}>{i + 1}</span>
-                <div><div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{h}</div><div style={{ fontSize: 12, color: T.mute, lineHeight: 1.5 }}>{b}</div></div>
-              </div>
-            ))}
-          </div>
-          <button onClick={() => setOnboarded(true)} style={{ width: "100%", padding: "13px", borderRadius: 8, border: "none", background: T.brass, color: "#141206", fontSize: 14, fontWeight: 600 }}>
-            Open the instrument
-          </button>
-          <p style={{ fontSize: 10.5, color: T.dimSolid, marginTop: 16, lineHeight: 1.5 }}>Decision support, not investment advice. Markets carry risk of loss.</p>
-        </div>
-      </div>
-    );
-  }
+  /* The landing gate is gone: this is opened several times a day, and a click
+     that says nothing new is friction. The framing and the disclaimer it used to
+     carry now live in the About panel, one tap from the header. */
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, color: T.ink, fontFamily: T.sans }}>
@@ -929,6 +901,8 @@ export default function Trinetra() {
               {mode === "live" ? (conn.state === "live" ? "Live" : conn.state === "error" ? "Error" : "Connecting") : "Demo"}
               {mode === "live" && conn.delayed && <span style={{ color: T.dimSolid, fontFamily: T.mono, fontSize: 9 }}>·15m</span>}
             </button>
+            <button onClick={() => setPanel("about")} title="About Trinetra"
+              style={{ padding: "6px 9px", borderRadius: 7, border: "1px solid " + T.line, background: T.card, color: T.mute, fontSize: 12 }}>ⓘ</button>
             <button onClick={() => setPaused(p => !p)} title={paused ? "Resume" : "Pause"} style={{ padding: "6px 9px", borderRadius: 7, border: "1px solid " + T.line, background: T.card, color: T.mute, fontSize: 11 }}>{paused ? "▶" : "❚❚"}</button>
           </div>
         </div>
@@ -1941,6 +1915,31 @@ export default function Trinetra() {
           <Playbook backendUrl={backendUrl} live={liveBackend} profileId={profileSel}
             held={held} onHold={markHolding} holdBusy={holdBusy} />
         </PraveshBoundary>
+      </Drawer>}
+
+      {panel === "about" && <Drawer title="About Trinetra" onClose={() => setPanel(null)}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+          <div style={{ width: 46, height: 46, borderRadius: 99, border: "1px solid " + T.brass + "66", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <div style={{ width: 18, height: 18, borderRadius: 99, background: "radial-gradient(circle at 50% 45%, " + T.brass + ", " + T.brassDeep + ")" }} />
+          </div>
+          <div>
+            <div style={{ fontFamily: T.serif, fontSize: 24, lineHeight: 1 }}>Trinetra</div>
+            <div style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 2.5, color: T.brass, marginTop: 4 }}>THE EYE OPENS WHEN EVERYTHING ALIGNS</div>
+          </div>
+        </div>
+        <p style={{ fontSize: 13, color: T.mute, lineHeight: 1.7 }}>
+          A vigilance instrument for NSE setups. It watches your universe and stays silent until a stock satisfies
+          <em style={{ color: T.ink, fontStyle: "normal" }}> every</em> criterion you set — fundamentals, breakout, volume —
+          then it opens, and tells you.
+        </p>
+        <p style={{ fontSize: 12.5, color: T.mute, lineHeight: 1.7 }}>
+          The backend runs the same scan server-side around the clock, so Telegram alerts fire with every tab closed.
+          The full manual is in <span style={{ color: T.brass }}>? Help</span> or at <span style={{ fontFamily: T.mono }}>/docs</span>.
+        </p>
+        <p style={{ fontSize: 11.5, color: T.dimSolid, lineHeight: 1.65, borderTop: "1px solid " + T.lineSoft, paddingTop: 12, marginTop: 14 }}>
+          Decision support, not investment advice. Signals are candidates — entry, stops and sizing remain yours.
+          Markets carry risk of loss.
+        </p>
       </Drawer>}
 
       {panel === "help" && <Drawer wide title="How to use Trinetra" onClose={() => setPanel(null)}>
