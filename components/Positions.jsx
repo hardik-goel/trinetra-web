@@ -187,6 +187,36 @@ function CycleCard({ sig, onAct, busy }) {
 
       {sig.reasoning && <div style={{ fontSize: 12.5, color: T.mute, lineHeight: 1.7, marginTop: 8 }}>{sig.reasoning}</div>}
 
+      {/* The backend flattens the levels into `pricing` ready to render. null
+          means no zone could be built — show the signal without prices rather
+          than inventing them. Labels and the arrow come from the payload. */}
+      {sig.pricing ? (
+        <div style={{ background: T.raised, border: "1px solid " + T.line, borderRadius: 9, padding: "9px 11px", marginTop: 9 }}>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "baseline", fontFamily: T.mono, fontSize: 11.5 }}>
+            <span style={{ color: T.ink }}>{sig.pricing.actionLabel} {rupee(sig.pricing.actionPrice)}</span>
+            <span style={{ color: T.ink }}>{sig.pricing.targetLabel} {rupee(sig.pricing.targetPrice)}</span>
+            <span style={{ color: sig.pricing.downward ? T.blue : T.green }}>
+              {sig.pricing.movePct != null ? `${(+sig.pricing.movePct).toFixed(1)}% ${sig.pricing.arrow || (sig.pricing.downward ? "▼" : "▲")}` : "—"}
+            </span>
+            {sig.pricing.riskReward?.toPrimary != null && (
+              <span style={{ color: sig.pricing.riskReward.toPrimary < 1 ? T.red : T.dimSolid }}>
+                R:R {(+sig.pricing.riskReward.toPrimary).toFixed(2)}{sig.pricing.riskReward.toPrimary < 1 ? " · risk exceeds reward" : ""}
+              </span>
+            )}
+          </div>
+          {sig.pricing.stop && (
+            <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.dimSolid, marginTop: 5 }}>
+              stop {rupee(sig.pricing.stop.price)} {sig.pricing.stop.above ? "above" : "below"}
+              {sig.pricing.stop.rationale ? ` — ${sig.pricing.stop.rationale}` : ""}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ fontSize: 11, color: T.dimSolid, marginTop: 8, lineHeight: 1.55 }}>
+          No price zone could be built for this one — the signal stands on its criteria alone.
+        </div>
+      )}
+
       {isSell && (
         <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.dimSolid, marginTop: 8, lineHeight: 1.7 }}>
           <div>entry {rupee(h.entryPrice)} · now {rupee(h.currentPrice)} · {pctText(h.gainPct)}</div>

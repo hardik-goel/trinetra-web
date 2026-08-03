@@ -6,6 +6,7 @@ import {
   presetRange, shortDate, signed, summariseHorizons, trackApi,
 } from "../lib/track";
 import { fetchPravesh } from "../lib/pravesh";
+import DataTable from "./DataTable";
 
 /* ================================================================
    TRACK RECORD — did this instrument earn its keep?
@@ -293,51 +294,42 @@ function SignalsView({ signals, trades, onLog, assumptions, stats }) {
       <ByDirection byDirection={stats?.byDirection} excluded={stats?.excluded} />
 
       <Label>Every signal, and what happened next</Label>
-      <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, padding: 6, overflowX: "auto", marginBottom: 16 }}>
-        <table>
-          <thead>
-            <tr>
-              {["Symbol", "Fired", "Price", "Locked", "1d", "3d", "7d", "30d", "Max ↑", "Max ↓", ""].map((h, i) => (
-                <th key={h + i} style={th(i > 3 ? { textAlign: "right" } : {})}>{h.toUpperCase()}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {signals.map(s => {
-              const taken = takenIds.has(s.id);
-              return (
-                <tr key={s.id}>
-                  <td style={td({ fontFamily: T.mono, fontSize: 12, color: T.ink, whiteSpace: "nowrap" })}>{s.symbol}</td>
-                  <td style={td({ fontFamily: T.mono, fontSize: 10.5, whiteSpace: "nowrap" })}>{shortDate(s.firedAt)}</td>
-                  <td style={td({ fontFamily: T.mono, fontSize: 11 })}>{inr(s.price, 2)}</td>
-                  <td style={td({ fontFamily: T.mono, fontSize: 10, color: T.brass, whiteSpace: "nowrap" })}
-                      title={(s.criteria || []).filter(c => c.pass).map(c => c.name).join(" · ")}>
-                    {s.combo} <span style={{ color: T.dimSolid }}>{s.count}/{s.total}</span>
-                  </td>
-                  {HORIZONS.map(d => {
-                    const v = s.outcome?.[`ret${d}d`];
-                    return (
-                      <td key={d} style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: v == null ? T.dim : tone(v) })}>
-                        {v == null ? "pending" : signed(v)}
-                      </td>
-                    );
-                  })}
-                  <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: T.green })}>{signed(s.outcome?.maxGain)}</td>
-                  <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: T.red })}>{signed(s.outcome?.maxDrawdown)}</td>
-                  <td style={td({ textAlign: "right", whiteSpace: "nowrap" })}>
-                    {taken
-                      ? <span style={{ fontFamily: T.mono, fontSize: 9, color: T.green }}>✓ logged</span>
-                      : <button onClick={() => onLog(s)} title="Log whether you took this one"
-                          style={{ ...btn(), padding: "4px 8px", fontSize: 10, borderColor: T.brass + "44", color: T.brass }}>
-                          Did you take this?
-                        </button>}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        dense
+        rowKey={r => r.id}
+        rows={signals}
+        empty="No signals in this range."
+        columns={[
+          { key: "symbol", label: "Symbol", type: "text", align: "left", mono: false,
+            render: r => <span style={{ fontFamily: T.mono, color: T.ink }}>{r.symbol}</span> },
+          { key: "direction", label: "Dir", type: "cat", value: r => r.direction || "buy",
+            render: r => <span style={{ fontFamily: T.mono, fontSize: 9, color: (r.direction === "sell") ? T.blue : T.green }}>
+              {(r.direction || "buy").toUpperCase()}</span> },
+          { key: "firedAt", label: "Fired", type: "date", value: r => r.firedAt, render: r => shortDate(r.firedAt) },
+          { key: "price", label: "Price", type: "number", render: r => inr(r.price, 2) },
+          { key: "combo", label: "Locked", type: "cat", align: "left",
+            render: r => <span style={{ color: T.brass }} title={(r.criteria || []).filter(c => c.pass).map(c => c.name).join(" · ")}>
+              {r.combo} <span style={{ color: T.dimSolid }}>{r.count}/{r.total}</span></span> },
+          ...HORIZONS.map(d => ({
+            key: `ret${d}d`, label: `${d}d`, type: "number",
+            // Magnitude, so a sell that fell 5% ranks with a buy that rose 5%.
+            value: r => { const v = r.outcome?.[`ret${d}d`]; return v == null ? null : Math.abs(v); },
+            render: r => { const v = r.outcome?.[`ret${d}d`];
+              return v == null ? <span style={{ color: T.dim }}>pending</span>
+                : <span style={{ color: tone(v) }}>{signed(v)}</span>; },
+          })),
+          { key: "maxGain", label: "Max ↑", type: "number", value: r => r.outcome?.maxGain,
+            render: r => <span style={{ color: T.green }}>{signed(r.outcome?.maxGain)}</span> },
+          { key: "maxDrawdown", label: "Max ↓", type: "number", value: r => r.outcome?.maxDrawdown,
+            render: r => <span style={{ color: T.red }}>{signed(r.outcome?.maxDrawdown)}</span> },
+          { key: "taken", label: "", type: "bool", sortable: false, filterable: false,
+            value: r => takenIds.has(r.id),
+            render: r => takenIds.has(r.id)
+              ? <span style={{ fontFamily: T.mono, fontSize: 9, color: T.green }}>✓ logged</span>
+              : <button onClick={e => { e.stopPropagation(); onLog(r); }}
+                  style={{ padding: "4px 8px", fontSize: 10, borderRadius: 6, border: "1px solid " + T.brass + "44",
+                    background: "transparent", color: T.brass, cursor: "pointer" }}>Did you take this?</button> },
+        ]} />
 
       {/* Which combination is actually carrying the record */}
       <Label>By criteria combination — does 3/3 beat 2/3?</Label>
