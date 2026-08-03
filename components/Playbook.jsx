@@ -97,7 +97,7 @@ function Confidence({ c, compact }) {
 }
 
 /* Convergence is the whole thesis of the feature, including when it is zero. */
-function Convergence({ n, spread, zone }) {
+function Convergence({ n, spread, zone, families }) {
   if (n == null) return null;
   if (n === 0) {
     return (
@@ -111,6 +111,11 @@ function Convergence({ n, spread, zone }) {
       <span style={{ color: T.brass, fontFamily: T.mono }}>{n}</span> independent method{n === 1 ? "" : "s"} agree
       {zone ? <> within <span style={{ fontFamily: T.mono, color: T.ink }}>{zoneText(zone)}</span></> : null}
       {n === 1 && <span style={{ color: T.dimSolid }}> — one method is a candidate, not a confluence.</span>}
+      {families?.length > 0 && (
+        <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid, marginTop: 4 }}>
+          {families.join(" · ")}
+        </div>
+      )}
     </div>
   );
 }
@@ -155,14 +160,14 @@ function EvidenceStack({ items }) {
 
 /* The whole trade on one scale: stop | entry | now | safe | primary | stretch. */
 function RangeBar({ pb, compact }) {
-  const stop = pb.exits?.stop?.zone, entry = pb.entry?.zone;
+  const stop = ex(pb, "stop")?.zone, entry = pb.entry?.zone;
   const pts = [
     stop && ["stop", (stop.low + stop.high) / 2, T.red],
     entry && ["entry", (entry.low + entry.high) / 2, T.brass],
     ["now", pb.price, T.ink],
-    pb.exits?.safe?.zone && ["safe", (pb.exits.safe.zone.low + pb.exits.safe.zone.high) / 2, T.green],
-    pb.exits?.primary?.zone && ["primary", (pb.exits.primary.zone.low + pb.exits.primary.zone.high) / 2, T.brass],
-    pb.exits?.stretch?.zone && ["stretch", (pb.exits.stretch.zone.low + pb.exits.stretch.zone.high) / 2, T.blue],
+    ex(pb, "safe")?.zone && ["safe", (ex(pb, "safe").zone.low + ex(pb, "safe").zone.high) / 2, T.green],
+    ex(pb, "primary")?.zone && ["primary", (ex(pb, "primary").zone.low + ex(pb, "primary").zone.high) / 2, T.brass],
+    ex(pb, "stretch")?.zone && ["stretch", (ex(pb, "stretch").zone.low + ex(pb, "stretch").zone.high) / 2, T.blue],
   ].filter(Boolean);
   if (pts.length < 2) return null;
   const vals = pts.map(p => p[1]).filter(Number.isFinite);
@@ -180,6 +185,13 @@ function RangeBar({ pb, compact }) {
   );
 }
 
+/* /playbook/all returns a flatter row than /playbook: primary, stop, riskReward
+   and exitConfidence sit at the top level there and under `exits` here. Read
+   both rather than rendering "—" against a payload that has the number. */
+const ex = (r, k) => r?.exits?.[k] ?? r?.[k];
+const exitConf = r => r?.exits?.confidence ?? r?.exitConfidence;
+const rrOf = r => r?.exits?.riskReward ?? r?.riskReward;
+
 const STATES = {
   waiting:    { label: "below entry", colour: T.dimSolid },
   actionable: { label: "in entry zone", colour: T.green },
@@ -187,7 +199,7 @@ const STATES = {
   exhausted:  { label: "at/beyond target", colour: T.amber },
 };
 function stateOf(r) {
-  const z = r.entry?.zone, p = r.price, primary = r.exits?.primary?.zone;
+  const z = r.entry?.zone, p = r.price, primary = ex(r, "primary")?.zone;
   if (primary && p >= (primary.low ?? Infinity)) return "exhausted";
   if (z && p < (z.low ?? -Infinity)) return "waiting";
   if (z && p >= z.low && p <= z.high) return "actionable";
@@ -195,7 +207,50 @@ function stateOf(r) {
 }
 
 /* ── detail ──────────────────────────────────────────────────────── */
-function Detail({ pb, onHold, held, busy }) {
+/* Scraping moneycontrol and trendlyne is blocked, so a broker target only
+   exists here if someone types it. It is worth typing: a target inside a zone
+   raises that zone's convergence, which is the whole scoring mechanism. */
+function AddBrokerCall({ symbol, onAdd }) {
+  const [open, setOpen] = useState(false);
+  const [f, setF] = useState({ broker: "", target: "", call: "buy", date: "" });
+  const [msg, setMsg] = useState("");
+  const inS = { background: T.bg, border: "1px solid " + T.line, color: T.ink, fontFamily: T.mono, fontSize: 11, borderRadius: 6, padding: "6px 8px" };
+  if (!open) {
+    return (
+      <div style={{ marginTop: 10 }}>
+        <button onClick={() => setOpen(true)} style={{ ...btn(), fontSize: 11 }}>+ Add a broker call</button>
+        <span style={{ fontSize: 10.5, color: T.dimSolid, marginLeft: 8 }}>
+          Scraping is blocked, so brokers only appear here if you enter them — and a target inside a zone lifts its convergence.
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div style={{ background: T.raised, border: "1px solid " + T.brass + "44", borderRadius: 9, padding: "10px 12px", marginTop: 10 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <input value={f.broker} onChange={e => setF({ ...f, broker: e.target.value })} placeholder="Broker" style={{ ...inS, flex: "1 1 150px" }} />
+        <input value={f.target} onChange={e => setF({ ...f, target: e.target.value })} type="number" step="any" placeholder="Target ₹" style={{ ...inS, width: 100 }} />
+        <select value={f.call} onChange={e => setF({ ...f, call: e.target.value })} style={inS}>
+          <option value="buy">buy</option><option value="hold">hold</option><option value="sell">sell</option>
+        </select>
+        <input value={f.date} onChange={e => setF({ ...f, date: e.target.value })} type="date" style={inS} />
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+        <button disabled={!f.broker.trim()} style={{ ...btn(true), opacity: f.broker.trim() ? 1 : .4 }}
+          onClick={async () => {
+            try {
+              await onAdd({ symbol, broker: f.broker.trim(), target: f.target === "" ? null : +f.target, call: f.call, date: f.date || undefined });
+              setMsg("Added — it will move the levels on the next read."); setF({ broker: "", target: "", call: "buy", date: "" });
+            } catch (e) { setMsg(e.message || "Could not add it"); }
+          }}>Add call</button>
+        <button onClick={() => { setOpen(false); setMsg(""); }} style={btn()}>Close</button>
+        {msg && <span style={{ fontSize: 10.5, color: /could not/i.test(msg) ? T.red : T.green }}>{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+function Detail({ pb, onHold, held, busy, onAddCall }) {
   const p = pb.potential || {};
   const big = (label, value, sub, colour) => (
     <div style={{ flex: "1 1 150px", background: T.card, border: "1px solid " + T.line, borderRadius: 10, padding: "11px 13px" }}>
@@ -221,7 +276,7 @@ function Detail({ pb, onHold, held, busy }) {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {big("Entry zone", zoneText(pb.entry?.zone), pb.entry?.kind)}
         {big("Current", rupee(pb.price, 0), pb.entry?.movedAlreadyPct != null ? `${pctText(pb.entry.movedAlreadyPct)} vs trigger` : null)}
-        {big("Primary exit", zoneText(pb.exits?.primary?.zone), pb.exits?.primary?.anchor)}
+        {big("Primary exit", zoneText(ex(pb, "primary")?.zone), ex(pb, "primary")?.anchor)}
         {big("Left to primary", p.toPrimaryPct != null ? pctText(p.toPrimaryPct) : "—",
           p.exhausted ? "typical move already spent" : null, p.exhausted ? T.amber : T.green)}
       </div>
@@ -239,7 +294,7 @@ function Detail({ pb, onHold, held, busy }) {
       <Label>Entry · confidence</Label>
       <Confidence c={pb.entry?.confidence} />
       <div style={{ marginTop: 8 }}>
-        <Convergence n={pb.entry?.convergence} zone={pb.entry?.zone} spread={pb.entry?.spread} />
+        <Convergence n={pb.entry?.convergence} zone={pb.entry?.zone} spread={pb.entry?.spread} families={pb.entry?.families} />
       </div>
       {(pb.entry?.anchors || []).length > 0 && (
         <div style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid, marginTop: 6, lineHeight: 1.7 }}>
@@ -249,11 +304,11 @@ function Detail({ pb, onHold, held, busy }) {
       <div style={{ marginTop: 10 }}><EvidenceStack items={pb.entry?.evidence} /></div>
 
       <Label>Exits · confidence</Label>
-      <Confidence c={pb.exits?.confidence} />
+      <Confidence c={exitConf(pb)} />
       <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8 }}>
         {["safe", "primary", "stretch"].map(k => {
-          const e = pb.exits?.[k]; if (!e) return null;
-          const rr = pb.exits?.riskReward?.[`to${k[0].toUpperCase()}${k.slice(1)}`];
+          const e = ex(pb, k); if (!e) return null;
+          const rr = rrOf(pb)?.[`to${k[0].toUpperCase()}${k.slice(1)}`];
           const poor = rr != null && rr < 1;
           return (
             <div key={k} style={{ background: T.card, border: "1px solid " + (poor ? T.red + "55" : T.line), borderRadius: 8, padding: "8px 10px" }}>
@@ -261,7 +316,11 @@ function Detail({ pb, onHold, held, busy }) {
                 <span style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid, minWidth: 52 }}>{k.toUpperCase()}</span>
                 <span style={{ fontFamily: T.mono, fontSize: 12, color: T.ink }}>{zoneText(e.zone)}</span>
                 <span style={{ fontFamily: T.mono, fontSize: 11, color: T.green }}>{pctText(e.pct)}</span>
-                <span style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid }}>{e.convergence != null ? `${e.convergence} agree` : ""}</span>
+                <span style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid }}
+                  title={(e.families || []).join(" · ")}>
+                  {e.convergence != null ? `${e.convergence} agree` : ""}
+                  {e.families?.length ? ` · ${e.families.join(", ")}` : ""}
+                </span>
                 <span style={{ fontFamily: T.mono, fontSize: 10.5, color: poor ? T.red : T.dimSolid, marginLeft: "auto" }}>
                   {rr != null ? `R:R ${(+rr).toFixed(1)}${poor ? " · risk exceeds reward" : ""}` : ""}
                 </span>
@@ -271,19 +330,19 @@ function Detail({ pb, onHold, held, busy }) {
             </div>
           );
         })}
-        {pb.exits?.stop && (
+        {ex(pb, "stop") && (
           <div style={{ background: T.card, border: "1px solid " + T.red + "44", borderRadius: 8, padding: "8px 10px" }}>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
               <span style={{ fontFamily: T.mono, fontSize: 10, color: T.red, minWidth: 52 }}>INVALIDATION</span>
-              <span style={{ fontFamily: T.mono, fontSize: 12, color: T.ink }}>{zoneText(pb.exits.stop.zone)}</span>
-              <span style={{ fontFamily: T.mono, fontSize: 11, color: T.red }}>{pctText(pb.exits.stop.pct)}</span>
+              <span style={{ fontFamily: T.mono, fontSize: 12, color: T.ink }}>{zoneText(ex(pb, "stop").zone)}</span>
+              <span style={{ fontFamily: T.mono, fontSize: 11, color: T.red }}>{pctText(ex(pb, "stop").pct)}</span>
             </div>
-            <div style={{ fontSize: 11, color: T.mute, marginTop: 4 }}>{pb.exits.stop.anchor} — {pb.exits.stop.rationale}</div>
+            <div style={{ fontSize: 11, color: T.mute, marginTop: 4 }}>{ex(pb, "stop").anchor} — {ex(pb, "stop").rationale}</div>
           </div>
         )}
       </div>
-      {pb.exits?.riskRewardWarning && (
-        <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>⚠ {pb.exits.riskRewardWarning}</div>
+      {(pb.exits?.riskRewardWarning || pb.riskRewardWarning) && (
+        <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>⚠ {pb.exits?.riskRewardWarning || pb.riskRewardWarning}</div>
       )}
 
       {/* Candles are cross-verification. Said once, plainly. */}
@@ -293,9 +352,13 @@ function Detail({ pb, onHold, held, busy }) {
         stock&apos;s own history, not a textbook table.
       </div>
       {(() => {
+        // The backend now separates these explicitly: `valid` may be shown as
+        // evidence, `detected` exists for transparency and includes patterns
+        // that failed their context test. Never render detected as findings.
         const all = pb.candles?.detected || [];
-        const valid = all.filter(c => c.contextValid !== false);
-        const contextless = all.filter(c => c.contextValid === false);
+        const valid = pb.candles?.valid || all.filter(c => c.contextValid !== false);
+        const validNames = new Set(valid.map(c => c.name));
+        const contextless = all.filter(c => c.contextValid === false || !validNames.has(c.name));
         if (!all.length) return <div style={{ fontSize: 11.5, color: T.dimSolid }}>No patterns detected in the recent window.</div>;
         return (
           <>
@@ -356,6 +419,8 @@ function Detail({ pb, onHold, held, busy }) {
       ) : (
         <div style={{ fontSize: 11.5, color: T.dimSolid }}>No broker calls recorded for this symbol.</div>
       )}
+
+      <AddBrokerCall symbol={pb.symbol} onAdd={onAddCall} />
 
       <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center", flexWrap: "wrap" }}>
         {held
@@ -430,7 +495,7 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
   const list = (rows || []).filter(r => !stateFilter || stateOf(r) === stateFilter);
   const val = r => sort.key === "potential" ? r.potential?.toPrimaryPct
     : sort.key === "entryConf" ? r.entry?.confidence?.score
-    : sort.key === "exitConf" ? (r.exits?.confidence?.score ?? r.exitConfidence)
+    : sort.key === "exitConf" ? exitConf(r)?.score
     : sort.key === "convergence" ? (r.convergence ?? r.entry?.convergence)
     : sort.key === "distance" ? (r.entry?.zone?.low != null && r.price != null ? Math.abs(r.entry.zone.low - r.price) / r.price : null)
     : null;
@@ -486,16 +551,20 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
                       </td>
                       <td style={td({ fontFamily: T.mono, fontSize: 11, whiteSpace: "nowrap" })}>{zoneText(r.entry?.zone)}</td>
                       <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: T.ink })}>{rupee(r.price, 0)}</td>
-                      <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, whiteSpace: "nowrap" })}>{zoneText(r.exits?.primary?.zone)}</td>
+                      <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, whiteSpace: "nowrap" })}>{zoneText(ex(r, "primary")?.zone)}</td>
                       <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: r.potential?.exhausted ? T.amber : T.green })}>
                         {r.potential?.toPrimaryPct != null ? pctText(r.potential.toPrimaryPct) : "—"}
                       </td>
                       <td style={td({ textAlign: "right" })}><Confidence c={r.entry?.confidence} compact /></td>
-                      <td style={td({ textAlign: "right" })}><Confidence c={r.exits?.confidence} compact /></td>
+                      <td style={td({ textAlign: "right" })}><Confidence c={exitConf(r)} compact /></td>
                       <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: conv === 0 ? T.amber : T.brass })}>
                         {conv == null ? "—" : conv}
                       </td>
                       <td style={td({ fontSize: 11.5, minWidth: 180 })}>
+                        {(() => { const rr = rrOf(r)?.toPrimary;
+                          return rr != null && rr < 1
+                            ? <div style={{ color: T.red, fontFamily: T.mono, fontSize: 10 }}>⚠ R:R {(+rr).toFixed(2)} — risk exceeds reward</div>
+                            : null; })()}
                         {r.reading || "—"}
                         <RangeBar pb={r} compact />
                       </td>
@@ -504,7 +573,8 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
                       <tr><td colSpan={9} style={{ padding: "12px 10px", background: T.bg, borderBottom: "1px solid " + T.line }}>
                         {!detail ? <span style={{ fontSize: 12, color: T.dimSolid }}>Reading the evidence…</span>
                           : detail.error ? <span style={{ fontSize: 12, color: T.amber }}>Could not load the detail — {detail.error}</span>
-                          : <Detail pb={detail} held={held?.has(r.symbol)} busy={holdBusy === r.symbol} onHold={onHold} />}
+                          : <Detail pb={detail} held={held?.has(r.symbol)} busy={holdBusy === r.symbol} onHold={onHold}
+                              onAddCall={async body => { await api.addAnalystCall(body); await openRow(r.symbol); await openRow(r.symbol); }} />}
                       </td></tr>
                     )}
                   </React.Fragment>
