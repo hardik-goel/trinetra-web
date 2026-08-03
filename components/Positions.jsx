@@ -102,6 +102,107 @@ function ExitCard({ sig, onClose, onDismiss, busy }) {
   );
 }
 
+/* The pair that must never be separated. Showing "made ₹6,000 trimming"
+   without "₹54,000 worse than holding" teaches the user the activity works
+   when his own data says otherwise — so they render on one row, same size. */
+function CyclePnl({ cycle }) {
+  if (!cycle || (cycle.realisedFromCycle == null && cycle.realisedPctFromCycle == null)) return null;
+  const qty = cycle.qtyKnown !== false;
+  const realised = qty ? rupee(cycle.realisedFromCycle) : pctText(cycle.realisedPctFromCycle);
+  const vs = cycle.cycleVsHold;
+  return (
+    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "baseline", marginTop: 6 }}>
+      <span style={{ fontFamily: T.mono, fontSize: 11.5, color: tone(cycle.realisedFromCycle ?? cycle.realisedPctFromCycle) }}>
+        {realised} from trimming
+      </span>
+      <span style={{ fontFamily: T.mono, fontSize: 11.5, color: vs == null ? T.dimSolid : tone(vs) }}>
+        {vs == null
+          ? `vs holding: ${cycle.notComparableReason || "not yet comparable"}`
+          : `${rupee(vs)} vs just holding`}
+      </span>
+      {!qty && <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid }}>no quantity recorded — percentages only</span>}
+    </div>
+  );
+}
+
+/* Quantity as fractions, because the user will tap a chip and will not fill a
+   form. Without one the backend keeps the rupee figures null rather than
+   inventing them. */
+function QtyChips({ label, onPick, busy }) {
+  const [open, setOpen] = useState(false);
+  if (!open) return <button onClick={() => setOpen(true)} disabled={busy} style={btn(true)}>{label}</button>;
+  return (
+    <span style={{ display: "inline-flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
+      <span style={{ fontSize: 11, color: T.dimSolid }}>how much?</span>
+      {[["25%", 0.25], ["33%", 0.33], ["50%", 0.5], ["all of it", 1]].map(([t, f]) => (
+        <button key={t} disabled={busy} onClick={() => { onPick(f); setOpen(false); }} style={{ ...btn(), padding: "4px 9px", fontSize: 10.5 }}>{t}</button>
+      ))}
+      <button disabled={busy} onClick={() => { onPick(null); setOpen(false); }} style={{ ...btn(), padding: "4px 9px", fontSize: 10.5 }}
+        title="Record it without a quantity — percentages stay honest, rupee figures stay blank">skip</button>
+      <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", color: T.dimSolid, fontSize: 11, cursor: "pointer" }}>✕</button>
+    </span>
+  );
+}
+
+/* ── SELL / BUY cards ─────────────────────────────────────────────
+   Above holdings, below fired exit signals: a broken thesis outranks
+   profit-taking. The subtitle is the only thing separating this from
+   ⚠ CLOSE POSITION and is rendered verbatim, never truncated. */
+function CycleCard({ sig, onAct, busy }) {
+  const isSell = sig.kind === "sell";
+  const colour = isSell ? T.amber : T.green;
+  const h = sig.holding || {};
+  const hp = h.holdingPeriod || {};
+  return (
+    <div className="rise" style={{ background: T.card, border: "1px solid " + colour + "55", borderLeft: "3px solid " + colour,
+      borderRadius: 11, padding: "13px 15px", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13.5, color: colour, fontWeight: 600 }}>{isSell ? "SELL" : "BUY"}</span>
+        <span style={{ fontFamily: T.mono, fontSize: 13, color: T.ink }}>{sig.symbol}</span>
+      </div>
+      <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>{sig.subtitle}</div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 9 }}>
+        {(sig.criteria || []).map((c, i) => (
+          <div key={i} style={{ display: "flex", gap: 8, fontSize: 11.5, color: c.pass ? T.mute : T.dimSolid }}>
+            <span style={{ fontFamily: T.mono, color: c.skipped ? T.dimSolid : c.pass ? T.green : T.red, width: 12 }}>
+              {c.skipped ? "·" : c.pass ? "✓" : "✕"}
+            </span>
+            <span style={{ minWidth: 110 }}>{c.name}</span>
+            <span style={{ flex: 1, lineHeight: 1.5 }}>{c.detail}</span>
+          </div>
+        ))}
+      </div>
+
+      {sig.reasoning && <div style={{ fontSize: 12.5, color: T.mute, lineHeight: 1.7, marginTop: 8 }}>{sig.reasoning}</div>}
+
+      {isSell && (
+        <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.dimSolid, marginTop: 8, lineHeight: 1.7 }}>
+          <div>entry {rupee(h.entryPrice)} · now {rupee(h.currentPrice)} · {pctText(h.gainPct)}</div>
+          <div style={{ color: h.stcg ? T.amber : T.dimSolid }}>
+            held {hp.months ?? h.heldMonths ?? "—"} months{h.stcg ? " — selling realises STCG" : ""}
+          </div>
+          {hp.caveat && <div style={{ color: T.amber, fontFamily: T.sans, fontSize: 10.5, lineHeight: 1.5 }}>⚠ {hp.caveat}</div>}
+        </div>
+      )}
+      {!isSell && sig.belowSalePct != null && (
+        <div style={{ fontFamily: T.mono, fontSize: 11, color: T.green, marginTop: 8 }}>
+          {pctText(sig.belowSalePct)} below your sale at {rupee(sig.sellPrice)}
+        </div>
+      )}
+
+      <div style={{ fontSize: 12.5, color: colour, marginTop: 9 }}>{sig.suggestion}</div>
+      {sig.reentryRisk && <div style={{ fontSize: 11, color: T.dimSolid, marginTop: 4, lineHeight: 1.5 }}>{sig.reentryRisk}</div>}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <QtyChips label={isSell ? "I sold some" : "I bought back"} busy={busy}
+          onPick={fraction => onAct(sig, fraction)} />
+        <span style={{ fontSize: 10.5, color: T.dimSolid }}>Decision support — the call is yours.</span>
+      </div>
+    </div>
+  );
+}
+
 /* ── holdings ────────────────────────────────────────────────────── */
 function HoldingRow({ h, exits, armed, onEdit, onDrop, busy }) {
   const [open, setOpen] = useState(false);
@@ -121,7 +222,20 @@ function HoldingRow({ h, exits, armed, onEdit, onDrop, busy }) {
           </div>
           <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.dimSolid, marginTop: 4 }}>
             entry {rupee(h.entryPrice)} · {h.daysHeld ?? "—"}d held{h.qty ? ` · ${h.qty} qty` : ""}
+            {h.cycle?.status && h.cycle.status !== "full" && (
+              <span style={{ color: T.amber }}> · {h.cycle.status}
+                {h.cycle.sellPrice ? ` at ${rupee(h.cycle.sellPrice)}` : ""}
+                {h.cycle.belowSalePct != null ? ` · now ${pctText(h.cycle.belowSalePct)} vs that` : ""}
+              </span>
+            )}
+            {h.holdingPeriod?.months != null && (
+              <span style={{ color: h.holdingPeriod.stcg ? T.amber : T.dimSolid }}> · {h.holdingPeriod.months}mo{h.holdingPeriod.stcg ? " STCG" : ""}</span>
+            )}
           </div>
+          {h.holdingPeriod?.caveat && (
+            <div style={{ fontSize: 10.5, color: T.amber, marginTop: 3, lineHeight: 1.5 }}>⚠ {h.holdingPeriod.caveat}</div>
+          )}
+          <CyclePnl cycle={h.cycle} />
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontFamily: T.mono, fontSize: 13, color: tone(h.unrealisedPct) }}>{pctText(h.unrealisedPct)}</div>
@@ -152,7 +266,10 @@ function HoldingRow({ h, exits, armed, onEdit, onDrop, busy }) {
             onBlur={e => e.target.value !== "" && onEdit(h.id, { stopLoss: +e.target.value })} />
           <input type="number" step="any" defaultValue={h.target ?? ""} placeholder="Target" style={{ ...inS, width: 90 }}
             onBlur={e => e.target.value !== "" && onEdit(h.id, { target: +e.target.value })} />
-          <span style={{ fontSize: 10.5, color: T.dimSolid }}>optional — blur to save</span>
+          <input type="date" defaultValue={(h.purchaseDate || h.markedAt || "").slice(0, 10)} title="When you actually bought it — fixes the STCG basis"
+            style={{ ...inS, width: 148 }}
+            onChange={e => e.target.value && onEdit(h.id, { purchaseDate: e.target.value })} />
+          <span style={{ fontSize: 10.5, color: T.dimSolid }}>optional — blur to save · date fixes the STCG basis</span>
           <button onClick={() => onDrop(h.id)} disabled={busy} style={{ ...btn(), color: T.red, borderColor: T.red + "55", marginLeft: "auto" }}>
             Remove holding
           </button>
@@ -263,23 +380,35 @@ function Concentration({ conc, sizing, onSaveSizing, onBackup, onRestoreFile, bu
 /* ── shell ───────────────────────────────────────────────────────── */
 export default function Positions({ backendUrl, live }) {
   const api = useMemo(() => (backendUrl ? deskApi(backendUrl) : null), [backendUrl]);
-  const [data, setData] = useState({ holdings: [], exits: [], armed: [], conc: null, sizing: null });
+  const [data, setData] = useState({ holdings: [], exits: [], armed: [], sell: [], buyBack: [], suppressed: [], conc: null, sizing: null });
   const [state, setState] = useState({ busy: true, err: "" });
 
   const load = useCallback(async () => {
     if (!api) return;
     setState(s => ({ ...s, busy: true }));
-    const [holdings, exitRes, conc, sizing] = await Promise.all([
+    const [holdings, exitRes, cycleRes, conc, sizing] = await Promise.all([
       api.holdings().then(r => r.holdings || []).catch(() => []),
       api.exitSignals().catch(() => null),
+      api.cycleSignals().catch(() => null),
       api.concentration().catch(() => null),
       api.sizingConfig().catch(() => null),
     ]);
-    setData({ holdings, exits: exitRes?.signals || [], armed: exitRes?.armed || [], conc, sizing });
+    setData({ holdings, exits: exitRes?.signals || [], armed: exitRes?.armed || [],
+      sell: cycleRes?.sell || [], buyBack: cycleRes?.buyBack || [], suppressed: cycleRes?.suppressed || [],
+      conc, sizing });
     setState({ busy: false, err: "" });
   }, [api]);
 
   useEffect(() => { load(); }, [load]);
+
+  /* A fraction only becomes a quantity if the holding recorded one. Otherwise
+     send nothing and let the backend keep the rupee figures null rather than
+     inventing a size the user never gave. */
+  const qtyFor = (sig, fraction) => {
+    const h = data.holdings.find(x => x.id === sig.holdingId);
+    const q = h?.qty ?? h?.cycle?.coreQty;
+    return q ? Math.max(1, Math.round(q * fraction)) : undefined;
+  };
 
   const act = async (fn) => {
     setState(s => ({ ...s, busy: true }));
@@ -321,6 +450,39 @@ export default function Positions({ backendUrl, live }) {
             <ExitCard key={s.id} sig={s} busy={state.busy}
               onClose={(id, patch) => act(() => api.patchHolding(id, patch))}
               onDismiss={(id, rule) => act(() => api.dismiss(id, rule))} />
+          ))}
+        </div>
+      )}
+
+      {/* Trading around a core position. Below fired exit rules — a broken thesis
+          outranks profit-taking — and above the holdings themselves. */}
+      {(data.sell.length > 0 || data.buyBack.length > 0) && (
+        <div style={{ marginBottom: 16 }}>
+          <Label accent={T.amber}>Trim &amp; re-enter · {data.sell.length + data.buyBack.length}</Label>
+          {data.sell.map(sig => (
+            <CycleCard key={sig.id} sig={sig} busy={state.busy}
+              onAct={(s2, f) => act(() => api.sold(s2.holdingId, f == null ? {} : { qty: qtyFor(s2, f) }))} />
+          ))}
+          {data.buyBack.map(sig => (
+            <CycleCard key={sig.id} sig={sig} busy={state.busy}
+              onAct={(s2, f) => act(() => api.boughtBack(s2.holdingId, f == null ? {} : { qty: qtyFor(s2, f) }))} />
+          ))}
+        </div>
+      )}
+
+      {/* A buy-back withheld because the trend broke is a finding. Silence would
+          read as "no pullback yet" when it means "this is a falling knife". */}
+      {data.suppressed.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <Label accent={T.dimSolid}>Withheld</Label>
+          {data.suppressed.map((x, i) => (
+            <div key={i} style={{ background: T.card, border: "1px dashed " + T.line, borderRadius: 9, padding: "9px 12px", marginBottom: 6 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "baseline" }}>
+                <span style={{ fontFamily: T.mono, fontSize: 12, color: T.ink }}>{x.symbol}</span>
+                <span style={{ fontSize: 12, color: T.amber }}>{x.reason}</span>
+              </div>
+              {x.detail && <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginTop: 4 }}>{x.detail}</div>}
+            </div>
           ))}
         </div>
       )}

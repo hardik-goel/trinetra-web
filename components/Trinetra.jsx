@@ -406,11 +406,14 @@ export default function Trinetra() {
     catch { /* older backend: the single-criteria editor keeps working */ }
   }, [desk]);
 
+  const [cycleBySymbol, setCycleBySymbol] = useState({});
   const loadHeld = useCallback(async () => {
     if (!desk) return;
     try {
       const j = await desk.holdings();
-      setHeld(new Set((j?.holdings || []).filter(h => h.status !== "closed").map(h => h.symbol)));
+      const open = (j?.holdings || []).filter(h => h.status !== "closed");
+      setHeld(new Set(open.map(h => h.symbol)));
+      setCycleBySymbol(Object.fromEntries(open.filter(h => h.cycle?.status && h.cycle.status !== "full").map(h => [h.symbol, h.cycle])));
     } catch { /* holdings are optional on older backends */ }
   }, [desk]);
 
@@ -804,12 +807,17 @@ export default function Trinetra() {
   const profilesSatisfied = useCallback(s =>
     s.profilesLocked || Object.entries(s.profileResults || {}).filter(([, r]) => r?.locked).map(([id]) => id), []);
 
+  /* appliesTo: "holdings" — a trim signal on a stock the user does not own is a
+     short recommendation, which is out of scope for this app. */
+  const holdingsOnlyProfile = profileSel !== "ALL" && profiles?.[profileSel]?.appliesTo === "holdings";
+
   const ranked = useMemo(() => {
     const q = query.trim().toLowerCase();
     const rows = stocks.map(s => ({ s, ev: evalFor(s), tags: groupsOf(s.symbol, s), locks: profilesSatisfied(s) }))
       .filter(({ s, ev, tags }) => {
         if (q && !s.symbol.toLowerCase().includes(q) && !(s.name || "").toLowerCase().includes(q)) return false;
         if (groupSel !== "ALL" && !tags.includes(groupSel)) return false;
+        if (holdingsOnlyProfile && !held.has(s.symbol)) return false;
         if (wlFilter.minCount && ev.count < wlFilter.minCount) return false;
         if (wlFilter.sector && s.sector !== wlFilter.sector) return false;
         if (wlFilter.signalToday && !firedToday.has(s.symbol)) return false;
@@ -841,7 +849,7 @@ export default function Trinetra() {
       return sign * (av - bv) || (b.ev.volX || 0) - (a.ev.volX || 0);
     });
     return rows;
-  }, [stocks, criteria, query, groupSel, groupsOf, wlSort, wlFilter, firedToday, evalFor, profilesSatisfied, decisionOf]);
+  }, [stocks, criteria, query, groupSel, groupsOf, wlSort, wlFilter, firedToday, evalFor, profilesSatisfied, decisionOf, holdingsOnlyProfile, held]);
 
   const activeFilters = [
     groupSel !== "ALL" && ["group", groupSel, () => setGroupSel("ALL")],
@@ -1081,6 +1089,13 @@ export default function Trinetra() {
             </div>
           )}
 
+          {holdingsOnlyProfile && (
+            <div style={{ fontSize: 11, color: T.amber, marginBottom: 8, lineHeight: 1.5 }}>
+              This profile applies only to stocks you hold — showing your {held.size} holding{held.size === 1 ? "" : "s"}.
+              A trim signal on a stock you do not own would be a short recommendation, which this app does not make.
+            </div>
+          )}
+
           {/* group selector — a slice of the same scan set, never a second universe */}
           {groups && Object.keys(groups).length > 0 && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
@@ -1199,7 +1214,14 @@ export default function Trinetra() {
               {liveBackend && (
                 <div style={{ marginTop: -6, marginBottom: 2, display: "flex", justifyContent: "flex-end" }}>
                   {held.has(s.symbol)
-                    ? <span style={{ fontFamily: T.mono, fontSize: 9, color: T.green }}>✓ holding</span>
+                    ? <span style={{ fontFamily: T.mono, fontSize: 9, color: T.green }}>
+                        ✓ holding
+                        {cycleBySymbol[s.symbol] && (
+                          <span style={{ color: T.amber }} title={cycleBySymbol[s.symbol].sellPrice ? `sold part at ₹${cycleBySymbol[s.symbol].sellPrice}` : undefined}>
+                            {" · " + cycleBySymbol[s.symbol].status}
+                          </span>
+                        )}
+                      </span>
                     : <button onClick={e => { e.stopPropagation(); markHolding(s.symbol); }} disabled={holdBusy === s.symbol}
                         style={{ background: "none", border: "none", color: T.brass, fontFamily: T.mono, fontSize: 9.5, cursor: "pointer", padding: 0 }}>
                         {holdBusy === s.symbol ? "marking…" : "+ I'm holding this"}
