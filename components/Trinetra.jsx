@@ -11,6 +11,8 @@ import ProfileCriteria from "./ProfileCriteria";
 import StockDecision from "./StockDecision";
 import Guide from "./Guide";
 import Playbook from "./Playbook";
+import DataTable from "./DataTable";
+import OriginalFour, { ORIGINAL_FOUR } from "./OriginalFour";
 
 /* ================================================================
    TRINETRA — the eye opens when everything aligns
@@ -1347,6 +1349,23 @@ export default function Trinetra() {
 
       {/* criteria panel */}
       {panel === "criteria" && <Drawer title="Criteria" onClose={() => setPanel(null)}>
+        <OriginalFour
+          criteria={profiles ? (profiles[profileSel === "ALL" ? "swing" : profileSel]?.criteria || []) : criteria}
+          metricLabel={id => metricMeta(id).label}
+          delayed={mode !== "live" || conn.delayed !== false}
+          restoring={restoring}
+          onRestore={liveBackend ? async () => {
+            setRestoring(true);
+            try { await desk.restoreDefaults(profileSel === "ALL" ? "swing" : profileSel); await loadProfiles(); }
+            finally { setRestoring(false); }
+          } : undefined} />
+
+        {profiles && (
+          <div style={{ fontFamily: T.mono, fontSize: 10, letterSpacing: 1.6, color: T.dimSolid, margin: "4px 0 8px" }}>
+            ADDITIONAL CRITERIA — everything added since
+          </div>
+        )}
+
         {profiles && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
             <span style={{ fontSize: 11.5, color: canonicalState.matches ? T.dimSolid : T.amber, lineHeight: 1.5 }}>
@@ -1896,65 +1915,40 @@ export default function Trinetra() {
           </div>
           {fundMsg && <div style={{ fontSize: 10.5, marginBottom: 8, lineHeight: 1.5, color: /failed/.test(fundMsg) ? T.red : T.mute }}>{fundMsg}</div>}
 
-          {/* the matrix */}
-          <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, overflow: "auto", maxHeight: "46vh" }}>
-            <table style={{ borderCollapse: "collapse", width: "100%" }}>
-              <thead>
-                <tr>
-                  {th("symbol", "SYMBOL")}
-                  {fundColumns.map(k => {
-                    const m = metricMeta(k);
-                    const checked = fundChecks.filter(c => c.metric === k);
-                    return th(k,
-                      (m.adhoc ? "＋" : "") + shortLabel(k, m.label) + (checked.length ? " •" : ""),
-                      `${m.label}${m.unit ? " (" + m.unit + ")" : ""}` +
-                      (checked.length ? " · filtered " + checked.map(c => OPS[c.op] + " " + c.value).join(" and ") : "") +
-                      (m.adhoc ? " · new metric from the backend — not named in this build yet" : ""));
-                  })}
-                  <th style={{ position: "sticky", top: 0, background: T.panel, borderBottom: "1px solid " + T.line,
-                    padding: "7px 8px", fontFamily: T.mono, fontSize: 9, letterSpacing: 1, fontWeight: 400, color: T.dimSolid, textAlign: "right" }}>DATA</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fundRows.map(({ sym, rec, verdicts, pass }) => (
-                  <tr key={sym}>
-                    <td style={{ padding: "7px 8px", borderBottom: "1px solid " + T.lineSoft, fontFamily: T.mono, fontSize: 11.5,
-                      color: pass ? T.brass : T.ink, whiteSpace: "nowrap" }}>
-                      {sym}
-                    </td>
-                    {fundColumns.map(k => {
-                      const v = rec?.[k];
-                      const j = verdicts[k];
-                      const color = v == null ? T.dim
-                        : !j ? T.mute
-                        : j.unverified ? T.dimSolid
-                        : j.ok ? T.green : T.red;
-                      return (
-                        <td key={k} title={j?.unverified ? "Unverified seed value — shown, but it cannot lock the gate" : undefined}
-                          style={{ padding: "7px 8px", borderBottom: "1px solid " + T.lineSoft, textAlign: "right",
-                            fontFamily: T.mono, fontSize: 11, whiteSpace: "nowrap", color,
-                            background: j && !j.na && !j.unverified ? (j.ok ? T.green + "0E" : T.red + "0E") : "transparent" }}>
-                          {fmtVal(k, v)}
-                        </td>
-                      );
-                    })}
-                    <td style={{ padding: "7px 8px", borderBottom: "1px solid " + T.lineSoft, textAlign: "right", whiteSpace: "nowrap" }}>
-                      {rec?.status === "demo"
-                        ? <span style={{ fontFamily: T.mono, fontSize: 9, color: T.dimSolid }}>◌ demo</span>
-                        : <span title={rec?.source || undefined} style={{ fontFamily: T.mono, fontSize: 9, color: T.dimSolid }}>
-                            <FundDot rec={rec || { status: "unavailable" }} /> {rec?.status || "none"}
-                          </span>}
-                    </td>
-                  </tr>
-                ))}
-                {!fundRows.length && (
-                  <tr><td colSpan={fundColumns.length + 2} style={{ padding: "22px 12px", textAlign: "center", fontSize: 12, color: T.dimSolid }}>
-                    Universe is empty — add symbols first.
-                  </td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          {/* the matrix — the shared table, so sort and filter behave here
+              exactly as they do everywhere else */}
+          <DataTable
+            dense
+            rowKey={r => r.sym}
+            rows={fundRows}
+            empty="Universe is empty — add symbols first."
+            columns={[
+              { key: "sym", label: "Symbol", type: "text", align: "left", mono: false,
+                render: r => <span style={{ fontFamily: T.mono, color: r.pass ? T.brass : T.ink }}>{r.sym}</span> },
+              ...fundColumns.map(k => {
+                const m = metricMeta(k);
+                const checked = fundChecks.filter(c => c.metric === k);
+                return {
+                  key: k, type: "number",
+                  label: (m.adhoc ? "＋" : "") + shortLabel(k, m.label) + (checked.length ? " •" : ""),
+                  title: `${m.label}${m.unit ? " (" + m.unit + ")" : ""}` +
+                    (checked.length ? " · filtered " + checked.map(c => OPS[c.op] + " " + c.value).join(" and ") : ""),
+                  value: r => r.rec?.[k],
+                  render: r => {
+                    const v = r.rec?.[k], j = r.verdicts[k];
+                    const colour = v == null ? T.dim : !j ? T.mute : j.unverified ? T.dimSolid : j.ok ? T.green : T.red;
+                    return <span title={j?.unverified ? "Unverified seed value — shown, but it cannot lock the gate" : undefined}
+                      style={{ color: colour }}>{fmtVal(k, v)}</span>;
+                  },
+                };
+              }),
+              { key: "status", label: "Data", type: "cat", value: r => r.rec?.status || "none",
+                render: r => r.rec?.status === "demo"
+                  ? <span style={{ fontFamily: T.mono, fontSize: 9, color: T.dimSolid }}>◌ demo</span>
+                  : <span title={r.rec?.source || undefined} style={{ fontFamily: T.mono, fontSize: 9, color: T.dimSolid }}>
+                      <FundDot rec={r.rec || { status: "unavailable" }} /> {r.rec?.status || "none"}
+                    </span> },
+            ]} />
 
           {/* filter builder */}
           <div style={{ marginTop: 16, borderTop: "1px solid " + T.lineSoft, paddingTop: 14 }}>
