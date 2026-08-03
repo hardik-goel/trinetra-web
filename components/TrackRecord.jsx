@@ -258,11 +258,22 @@ function ByDirection({ byDirection, excluded }) {
       {rows.map(([dir, d]) => d.note && (
         <div key={dir + "note"} style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.55, marginTop: 6 }}>{d.note}</div>
       ))}
-      {/* A total that quietly got smaller reads as a backend that lost data. */}
+      {/* A total that quietly got smaller reads as a backend that lost data.
+          The groups are separate stories — leaked screener signals and test
+          records are excluded for different reasons, so they list separately
+          rather than collapsing into one count. */}
       {excluded?.n > 0 && (
         <div style={{ fontSize: 11, color: T.amber, lineHeight: 1.6, marginTop: 8,
           background: T.amber + "0E", border: "1px solid " + T.amber + "33", borderRadius: 8, padding: "8px 11px" }}>
-          {excluded.n} record{excluded.n === 1 ? "" : "s"} excluded from these figures — {excluded.reason}
+          <div style={{ fontWeight: 600 }}>
+            {excluded.n} record{excluded.n === 1 ? "" : "s"} excluded from these figures
+          </div>
+          {(excluded.reasons || (excluded.reason ? [{ reason: excluded.reason, n: excluded.n }] : [])).map((g, i) => (
+            <div key={i} style={{ marginTop: 5, color: T.mute, lineHeight: 1.55 }}>
+              · <span style={{ fontFamily: T.mono, color: T.amber }}>{g.n}</span> — {g.reason}
+              {g.symbols?.length ? <span style={{ color: T.dimSolid }}> ({g.symbols.join(", ")})</span> : null}
+            </div>
+          ))}
         </div>
       )}
     </div>
