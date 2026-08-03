@@ -220,7 +220,55 @@ function HorizonStrip({ horizons, title }) {
   );
 }
 
-function SignalsView({ signals, trades, onLog, assumptions }) {
+/* A sell is correct when price FELL. Averaging that with buys produces a number
+   about nothing, so the two never merge — separate rows, each with its own n. */
+function ByDirection({ byDirection, excluded }) {
+  const rows = ["buy", "sell"].map(k => [k, byDirection?.[k]]).filter(([, v]) => v);
+  if (!rows.length && !excluded) return null;
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <Label>Buy vs sell — measured separately</Label>
+      {rows.length ? (
+        <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, padding: 6, overflowX: "auto" }}>
+          <table>
+            <thead><tr>{["Direction", "Signals", "7d win", "7d avg", "30d win"].map((h, i) => (
+              <th key={h} style={th(i ? { textAlign: "right" } : {})}>{h.toUpperCase()}</th>))}</tr></thead>
+            <tbody>
+              {rows.map(([dir, d]) => {
+                const h7 = d.horizons?.ret7d || {}, h30 = d.horizons?.ret30d || {};
+                const w7 = pctOrThin(h7.winRate, h7.n, MIN_SIGNALS), w30 = pctOrThin(h30.winRate, h30.n, MIN_SIGNALS);
+                return (
+                  <tr key={dir}>
+                    <td style={td({ fontFamily: T.mono, fontSize: 11.5, color: dir === "sell" ? T.blue : T.green })}>
+                      {dir.toUpperCase()}
+                      {dir === "sell" && <span style={{ color: T.dimSolid, fontSize: 9 }}> ▼ measured downward</span>}
+                    </td>
+                    <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11 })}>{d.n ?? h7.n ?? 0}</td>
+                    <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 10.5, color: w7.thin ? T.dimSolid : T.ink })}>{w7.text}</td>
+                    <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: tone(h7.avg) })}>{signed(h7.avg)}</td>
+                    <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 10.5, color: w30.thin ? T.dimSolid : T.ink })}>{w30.text}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {rows.map(([dir, d]) => d.note && (
+        <div key={dir + "note"} style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.55, marginTop: 6 }}>{d.note}</div>
+      ))}
+      {/* A total that quietly got smaller reads as a backend that lost data. */}
+      {excluded?.n > 0 && (
+        <div style={{ fontSize: 11, color: T.amber, lineHeight: 1.6, marginTop: 8,
+          background: T.amber + "0E", border: "1px solid " + T.amber + "33", borderRadius: 8, padding: "8px 11px" }}>
+          {excluded.n} record{excluded.n === 1 ? "" : "s"} excluded from these figures — {excluded.reason}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SignalsView({ signals, trades, onLog, assumptions, stats }) {
   const horizons = useMemo(() => summariseHorizons(signals), [signals]);
   const combos = useMemo(() => byCombo(signals), [signals]);
   const criteria = useMemo(() => byCriterion(signals), [signals]);
@@ -241,6 +289,8 @@ function SignalsView({ signals, trades, onLog, assumptions }) {
   return (
     <div style={{ marginTop: 16 }}>
       <HorizonStrip horizons={horizons} title={`Forward returns · ${signals.length} signals fired`} />
+
+      <ByDirection byDirection={stats?.byDirection} excluded={stats?.excluded} />
 
       <Label>Every signal, and what happened next</Label>
       <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, padding: 6, overflowX: "auto", marginBottom: 16 }}>
@@ -866,7 +916,8 @@ export default function TrackRecord({ backendUrl, live }) {
       {state.busy && !data.signals.length && !data.trades.length
         ? <div style={{ marginTop: 20, fontSize: 12.5, color: T.dimSolid }}>Reading the record…</div>
         : <>
-            {view === "signals" && <SignalsView signals={data.signals} trades={data.trades} onLog={logFromSignal} assumptions={data.sigStats?.assumptions} />}
+            {view === "signals" && <SignalsView signals={data.signals} trades={data.trades} onLog={logFromSignal}
+              assumptions={data.sigStats?.assumptions} stats={data.sigStats} />}
             {view === "paper" && <PaperView trades={data.trades} stats={data.tradeStats} draft={draft} setDraft={setDraft}
               onSubmit={submitTrade} onPatch={(id, patch) => guard(() => api.patchTrade(id, patch))}
               onDelete={id => guard(() => api.deleteTrade(id))} busy={state.busy} showForm={showForm} setShowForm={setShowForm} />}
