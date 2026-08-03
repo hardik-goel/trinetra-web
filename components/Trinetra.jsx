@@ -284,6 +284,7 @@ export default function Trinetra() {
      configuration, never the credentials. null until /config has been read. */
   const [tgRemote, setTgRemote] = useState(null);
   const [tgLoad, setTgLoad] = useState({ busy: false, err: "" });
+  const [alertStatus, setAlertStatus] = useState(null);
   const [notifOn, setNotifOn] = useState(false);
   const [interval_, setInterval_] = useState(3);
   const alerted = useRef(new Set());
@@ -617,6 +618,10 @@ export default function Trinetra() {
   }, [mode, backendUrl]);
 
   useEffect(() => { if (panel === "alerts") loadAlertConfig(); }, [panel, loadAlertConfig]);
+  useEffect(() => {
+    if (panel !== "alerts" || !desk) return;
+    desk.alertsStatus().then(setAlertStatus).catch(() => setAlertStatus(null));
+  }, [panel, desk]);
 
   const pushConfig = async () => {
     if (mode !== "live" || !backendUrl) return null;
@@ -1329,6 +1334,41 @@ export default function Trinetra() {
       {/* alerts panel */}
       {panel === "alerts" && <Drawer title="Alerts" onClose={() => setPanel(null)}>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Silence has causes. Name the one in effect, so a quiet evening is
+              never mistaken for a dead backend — and say when it lifts. */}
+          {alertStatus && (
+            <div style={{ background: T.card, border: "1px solid " + (alertStatus.windowOpen ? T.green + "44" : T.line), borderRadius: 10, padding: "11px 13px" }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12.5, color: alertStatus.windowOpen ? T.green : T.mute, fontWeight: 600 }}>
+                  {alertStatus.windowOpen ? "● Market open — alerts can fire" : `○ Quiet — ${alertStatus.reason || "outside market hours"}`}
+                </span>
+                {!alertStatus.windowOpen && alertStatus.nextOpen && (
+                  <span style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid }}>next open {alertStatus.nextOpen}</span>
+                )}
+              </div>
+              <div style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid, marginTop: 6, lineHeight: 1.7 }}>
+                {alertStatus.sentToday ?? 0} sent today · {alertStatus.sentLastHour ?? 0} this hour ·
+                {" "}{(alertStatus.activeCooldowns || []).length} in cooldown ·
+                {" "}max {alertStatus.limits?.maxPerSymbolPerDay}/symbol/day, {alertStatus.limits?.maxPerCycle}/cycle
+                {alertStatus.lastCycle?.at ? ` · last scan ${new Date(alertStatus.lastCycle.at).toLocaleTimeString("en-IN", { hour12: false })}` : ""}
+              </div>
+              {alertStatus.telegramArmed === false && (
+                <div style={{ fontSize: 10.5, color: T.amber, marginTop: 5 }}>⚠ No Telegram credentials on the backend — nothing can be delivered.</div>
+              )}
+              {alertStatus.override && (
+                <div style={{ fontSize: 10.5, color: T.amber, marginTop: 5 }}>⚠ Market-hours gate is overridden — alerts can fire at any time.</div>
+              )}
+              {/* An incomplete holiday list is a silent failure mode: a closed
+                  market read as an open one. Say how incomplete it is. */}
+              {alertStatus.holidays && (
+                <div style={{ fontSize: 10.5, color: T.dimSolid, marginTop: 6, lineHeight: 1.55 }}>
+                  {alertStatus.holidays.count} holidays configured — only the fixed-date national ones. Moving holidays
+                  (Holi, Diwali, Id …) are not seeded, so those days fall back to weekday logic and alerts can fire on a
+                  closed market. Add them from the NSE circular each January.
+                </div>
+              )}
+            </div>
+          )}
           <button onClick={askNotif} style={{ textAlign: "left", padding: 13, borderRadius: 10, border: "1px solid " + T.line, background: T.card, color: notifOn ? T.green : T.mute, fontSize: 12.5 }}>
             {notifOn ? "✓ Browser notifications on" : "Enable browser notifications"}
             <div style={{ fontSize: 10.5, color: T.dimSolid, marginTop: 3 }}>Fires while this tab is open.</div>
