@@ -302,6 +302,19 @@ function Detail({ pb, onHold, held, busy, onAddCall }) {
         );
       })()}
 
+      {/* The percentages and the risk-reward are measured from the price you
+          would actually pay, which is not today's price on an untriggered
+          setup. Measuring from spot is what made these look attractive when
+          they were not, so the basis is stated rather than assumed. */}
+      {pb.basisPrice != null && (
+        <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.dimSolid, lineHeight: 1.6, marginBottom: 8 }}>
+          measured from {rupee(pb.basisPrice, 0)}{pb.basis ? ` · ${pb.basis}` : ""}
+          {pb.potential?.fromSpotToPrimaryPct != null && (
+            <> · {pctText(pb.potential.fromSpotToPrimaryPct)} away from today&apos;s price, which is distance, not the trade&apos;s potential</>
+          )}
+        </div>
+      )}
+
       {/* What the row is actually proposing. The rest of the app names its
           actions; this screen should not be the one that leaves it implied. */}
       <div style={{ fontSize: 11.5, color: T.dimSolid, lineHeight: 1.55, marginBottom: 10 }}>
