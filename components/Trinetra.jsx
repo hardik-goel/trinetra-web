@@ -197,12 +197,21 @@ async function tgSend(token, chatId, text) {
 const notify = (t, b) => { try { if ("Notification" in window && Notification.permission === "granted") new Notification(t, { body: b }); } catch {} };
 
 /* ── atoms ── */
-function Eye({ ev, s = 14 }) {
-  return <div style={{ display: "flex", gap: 3 }}>{ev.criteria.map(c => (
-    <div key={c.id} title={c.name} style={{ width: s, height: s * 1.5, borderRadius: 2,
-      background: c.pass ? T.brass : "transparent", border: "1px solid " + (c.pass ? T.brass : c.na ? T.red + "55" : T.line),
-      boxShadow: ev.locked ? "0 0 10px " + T.brass + "55" : "none", transition: "all .6s cubic-bezier(.2,.8,.2,1)" }} />
-  ))}</div>;
+/* A partial lock is a different claim from a full one: one criterion could not
+   be measured, so the eye is open on what was measurable. It gets amber, a
+   dashed edge and no glow — never the same face as 3-of-3. */
+function Eye({ ev, s = 14, quality }) {
+  const partial = quality === "partial";
+  const lit = partial ? T.amber : T.brass;
+  return <div style={{ display: "flex", gap: 3 }} title={partial ? "Partial lock — one criterion had no data and was excluded" : undefined}>
+    {ev.criteria.map(c => (
+      <div key={c.id} title={c.name} style={{ width: s, height: s * 1.5, borderRadius: 2,
+        background: c.pass ? lit : "transparent",
+        border: (partial && c.pass ? "1px dashed " : "1px solid ") + (c.pass ? lit : c.na ? T.red + "55" : T.line),
+        boxShadow: ev.locked && !partial ? "0 0 10px " + T.brass + "55" : "none",
+        transition: "all .6s cubic-bezier(.2,.8,.2,1)" }} />
+    ))}
+  </div>;
 }
 function Spark({ hist, high20 }) {
   const w = 320, h = 64; const min = Math.min(...hist), max = Math.max(...hist, high20); const pad = (max - min) * .1 || 1;
@@ -327,6 +336,7 @@ export default function Trinetra() {
   const [profileSel, setProfileSel] = useState("swing");   // or "ALL"
   const [held, setHeld] = useState(() => new Set());       // symbols marked as holdings
   const [events, setEvents] = useState({});                // { SYMBOL: { events: [...], stale, source } }
+  const [lockInfo, setLockInfo] = useState({});            // symbol -> { lockQuality, lockedOn, notEvaluated, criteriaWarnings }
   const [holdBusy, setHoldBusy] = useState("");
 
   const [groups, setGroups] = useState(null);           // { name: [symbols] } | null until read
@@ -413,8 +423,27 @@ export default function Trinetra() {
     catch { /* optional surface */ }
   }, [desk]);
 
-  useEffect(() => { if (liveBackend) { loadProfiles(); loadHeld(); loadEvents(); } },
-    [liveBackend, loadProfiles, loadHeld, loadEvents]);
+  /* A 2-of-3 lock where one criterion had no data is not a 3-of-3 lock, and the
+     server is the only place that knows which it was. */
+  const loadLockInfo = useCallback(async () => {
+    if (!desk) return;
+    try {
+      const list = await desk.liveSignals();
+      const m = {};
+      for (const s of Array.isArray(list) ? list : []) {
+        m[s.symbol] = { lockQuality: s.lockQuality, lockedOn: s.lockedOn, notEvaluated: s.notEvaluated, criteriaWarnings: s.criteriaWarnings };
+      }
+      setLockInfo(m);
+    } catch { /* older backend: locks render without a quality mark */ }
+  }, [desk]);
+
+  useEffect(() => { if (liveBackend) { loadProfiles(); loadHeld(); loadEvents(); loadLockInfo(); } },
+    [liveBackend, loadProfiles, loadHeld, loadEvents, loadLockInfo]);
+  useEffect(() => {
+    if (!liveBackend) return;
+    const id = setInterval(loadLockInfo, 60_000);
+    return () => clearInterval(id);
+  }, [liveBackend, loadLockInfo]);
 
   /* One tap. No form, no modal, no confirmation — the user does not paper-trade
      and will not fill anything in. Entry price and the locked criteria are
@@ -973,7 +1002,7 @@ export default function Trinetra() {
         {/* signals */}
         <section style={{ marginTop: 22 }}>
           {(() => {
-            const warn = [...new Set(stocks.flatMap(s => (s.profileResults?.[profileSel === "ALL" ? "swing" : profileSel]?.warnings) || []))];
+            const warn = [...new Set(Object.values(lockInfo).flatMap(i => i?.criteriaWarnings || []))];
             return warn.length ? (
               <div style={{ background: T.amber + "10", border: "1px solid " + T.amber + "44", borderRadius: 9,
                 padding: "9px 12px", marginBottom: 10, fontSize: 11.5, color: T.amber, lineHeight: 1.55 }}>
@@ -1001,12 +1030,18 @@ export default function Trinetra() {
                       <span style={{ fontFamily: T.mono, fontSize: 14, fontWeight: 500 }}>{g.symbol}</span>
                       <span style={{ fontSize: 11, color: T.mute }}>{g.name}</span>
                     </div>
-                    <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.brass, marginTop: 3 }}>
+                    <div style={{ fontFamily: T.mono, fontSize: 10.5, color: lockInfo[g.symbol]?.lockQuality === "partial" ? T.amber : T.brass, marginTop: 3 }}>
                       ₹{fmtIN(g.price)} · vol {g.ev.volX?.toFixed(1)}× · {g.ev.count}/{g.ev.total} locked
+                      {lockInfo[g.symbol]?.lockQuality === "partial" && " · PARTIAL"}
                     </div>
+                    {lockInfo[g.symbol]?.notEvaluated?.length > 0 && (
+                      <div style={{ fontSize: 10.5, color: T.amber, marginTop: 3, lineHeight: 1.5 }}>
+                        not evaluated: {lockInfo[g.symbol].notEvaluated.join(", ")} — locked on what could be measured
+                      </div>
+                    )}
                   </div>
                   <div style={{ textAlign: "right" }}>
-                    <Eye ev={g.ev} s={9} />
+                    <Eye ev={g.ev} s={9} quality={lockInfo[g.symbol]?.lockQuality} />
                     <div style={{ fontFamily: T.mono, fontSize: 9, color: T.dimSolid, marginTop: 4 }}>{g.time} IST</div>
                   </div>
                 </button>
@@ -1165,7 +1200,7 @@ export default function Trinetra() {
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                   <FundDot rec={funds[s.symbol]} />
                   <span style={{ fontFamily: T.mono, fontSize: 10, color: ev.locked ? T.brass : T.dimSolid }}>{ev.count}/{ev.total}</span>
-                  <Eye ev={ev} s={9} />
+                  <Eye ev={ev} s={9} quality={lockInfo[s.symbol]?.lockQuality} />
                 </div>
               </button>
               {liveBackend && (
