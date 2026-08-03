@@ -10,6 +10,7 @@ import { deskApi } from "../lib/desk";
 import ProfileCriteria from "./ProfileCriteria";
 import StockDecision from "./StockDecision";
 import Guide from "./Guide";
+import Playbook from "./Playbook";
 
 /* ================================================================
    TRINETRA — the eye opens when everything aligns
@@ -953,6 +954,7 @@ export default function Trinetra() {
             <LedgerGlyph size={12} color={panel === "fundamentals" ? T.brass : T.mute} /> Fundamentals
             <span style={{ color: fundCrit?.enabled ? T.brass : T.dimSolid, fontFamily: T.mono }}>{fundChecks.length}</span>
           </button>
+          <button onClick={() => setPanel("playbook")} style={chip(panel === "playbook")}>◧ Playbook</button>
           <button onClick={() => setPanel("help")} style={chip(panel === "help")} title="How to use Trinetra">? Help</button>
           <button onClick={() => setPanel("brief")} style={chip(panel === "brief")}>☀ Brief</button>
           <button onClick={() => setPanel("positions")} style={chip(panel === "positions")}>
@@ -1933,6 +1935,13 @@ export default function Trinetra() {
           </div>
         </Drawer>;
       })()}
+
+      {panel === "playbook" && <Drawer wide title="Playbook" onClose={() => setPanel(null)}>
+        <PraveshBoundary>
+          <Playbook backendUrl={backendUrl} live={liveBackend} profileId={profileSel}
+            held={held} onHold={markHolding} holdBusy={holdBusy} />
+        </PraveshBoundary>
+      </Drawer>}
 
       {panel === "help" && <Drawer wide title="How to use Trinetra" onClose={() => setPanel(null)}>
         <Guide />
