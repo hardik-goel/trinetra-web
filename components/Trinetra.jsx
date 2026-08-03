@@ -403,7 +403,7 @@ export default function Trinetra() {
     try {
       const j = await desk.profiles();
       setProfiles(j?.profiles || null);
-      setCanonicalState({ matches: j?.matchesCanonical !== false, canonical: j?.canonical || null });
+      setCanonicalState({ matches: j?.matchesCanonical !== false, canonical: j?.canonical || null, originalFour: j?.originalFour || null });
     }
     catch { /* older backend: the single-criteria editor keeps working */ }
   }, [desk]);
@@ -1350,14 +1350,22 @@ export default function Trinetra() {
       {/* criteria panel */}
       {panel === "criteria" && <Drawer title="Criteria" onClose={() => setPanel(null)}>
         <OriginalFour
+          originalFour={canonicalState.originalFour}
           criteria={profiles ? (profiles[profileSel === "ALL" ? "swing" : profileSel]?.criteria || []) : criteria}
           metricLabel={id => metricMeta(id).label}
           delayed={mode !== "live" || conn.delayed !== false}
           restoring={restoring}
           onRestore={liveBackend ? async () => {
             setRestoring(true);
-            try { await desk.restoreDefaults(profileSel === "ALL" ? "swing" : profileSel); await loadProfiles(); }
-            finally { setRestoring(false); }
+            try {
+              // The response carries criteria + originalFour + matchesCanonical,
+              // so re-render from it rather than refetching.
+              const j = await desk.restoreOriginalFour(profileSel === "ALL" ? "swing" : profileSel);
+              if (j?.originalFour) {
+                setCanonicalState(cs => ({ ...cs, originalFour: j.originalFour, matches: j.matchesCanonical !== false }));
+              }
+              await loadProfiles();
+            } finally { setRestoring(false); }
           } : undefined} />
 
         {profiles && (

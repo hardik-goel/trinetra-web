@@ -56,6 +56,10 @@ const zoneText = z => {
 
 /** Measured, or explicitly not. "0%" and "unmeasured" are different claims. */
 function Reliability({ r }) {
+  // insufficient means "we counted, and it is too few" — show the count, not a rate.
+  if (r?.insufficient) {
+    return <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid }}>insufficient history · n={r.n ?? 0}</span>;
+  }
   if (!r || r.rate == null || (r.n ?? 0) < 1) {
     return <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid }}>reliability: not yet measurable</span>;
   }
@@ -194,6 +198,19 @@ const rrOf = r => r?.exits?.riskReward ?? r?.riskReward;
 
 /* HORIZON_SESSIONS in plain units. Sessions are the engine's unit; "3–5 days"
    is the one a person plans around. */
+/* A sell captures a fall. Printing its pct (-5.5%) reads as a loss, and calling
+   it upside is simply wrong — so magnitude plus a direction arrow, always from
+   the payload, never inferred from the sign. */
+function moveText(level, direction) {
+  if (!level) return "—";
+  const down = level.downward ?? (direction === "sell");
+  const mag = level.movePct != null ? level.movePct : (level.pct != null ? Math.abs(level.pct) : null);
+  if (mag == null) return "—";
+  return `${(+mag).toFixed(1)}% ${down ? "▼" : "▲"}`;
+}
+const moveColour = (level, direction) =>
+  ((level?.downward ?? (direction === "sell")) ? T.blue : T.green);
+
 const TIMEFRAME = {
   intraday:   "today",
   swing:      "3–5 days",
@@ -334,11 +351,13 @@ function Detail({ pb, onHold, held, busy, onAddCall }) {
       )}
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {big("Entry zone", zoneText(pb.entry?.zone), pb.entry?.kind)}
+        {big(pb.exits?.actionLabel || "Entry zone", zoneText(pb.entry?.zone), pb.entry?.kind)}
         {big("Current", rupee(pb.price, 0), pb.entry?.movedAlreadyPct != null ? `${pctText(pb.entry.movedAlreadyPct)} vs trigger` : null)}
-        {big("Primary exit", zoneText(ex(pb, "primary")?.zone), ex(pb, "primary")?.anchor)}
-        {big("Left to primary", p.toPrimaryPct != null ? pctText(p.toPrimaryPct) : "—",
-          p.exhausted ? "typical move already spent" : null, p.exhausted ? T.amber : T.green)}
+        {big(pb.exits?.targetLabel || "Primary exit", zoneText(ex(pb, "primary")?.zone), ex(pb, "primary")?.anchor)}
+        {big(pb.direction === "sell" ? "Capture" : "Left to target",
+          moveText(ex(pb, "primary") || { movePct: p.toPrimaryPct }, pb.direction),
+          p.exhausted ? "typical move already spent" : (pb.direction === "sell" ? "the fall you would capture" : null),
+          p.exhausted ? T.amber : moveColour(ex(pb, "primary"), pb.direction))}
       </div>
 
       <RangeBar pb={pb} />
@@ -467,7 +486,17 @@ function Detail({ pb, onHold, held, busy, onAddCall }) {
           {pb.analysts.calls.map((c, i) => (
             <div key={i} style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 8, padding: "8px 10px", marginBottom: 5 }}>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "baseline" }}>
-                <span style={{ fontSize: 12.5, color: T.ink }}>{c.broker}</span>
+                {/* A named person's call is not a brokerage target — and it ages
+                    faster: 45 days vs 90. Stale ones are struck through, never
+                    dropped, so an old view cannot masquerade as current. */}
+                {c.kind === "expert" && (
+                  <span style={{ fontFamily: T.mono, fontSize: 8.5, letterSpacing: .8, color: T.brass,
+                    border: "1px solid " + T.brass + "55", borderRadius: 4, padding: "1px 4px" }}>EXPERT</span>
+                )}
+                <span style={{ fontSize: 12.5, color: T.ink, textDecoration: c.stale ? "line-through" : "none" }}>{c.broker || c.name}</span>
+                {c.stale && <span style={{ fontFamily: T.mono, fontSize: 9, color: T.dimSolid }}>
+                  stale · older than {c.staleAfterDays || (c.kind === "expert" ? 45 : 90)}d
+                </span>}
                 <span style={{ fontFamily: T.mono, fontSize: 11, color: T.brass }}>{rupee(c.target, 0)}</span>
                 <span style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid }}>{c.date}</span>
                 {c.url && <a href={c.url} target="_blank" rel="noreferrer" style={{ fontFamily: T.mono, fontSize: 9.5, color: T.blue, textDecoration: "none" }}>source ↗</a>}
@@ -595,7 +624,7 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
         <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, padding: 6, overflowX: "auto" }}>
           <table style={{ borderCollapse: "collapse", width: "100%" }}>
             <thead><tr>
-              {["Symbol", "Entry", "Current", "Exit", "Left", "Timeframe", "Confidence"].map((h, i) => (
+              {["Symbol", "Dir", "Entry / Sell at", "Current", "Target / Buy back", "Left", "Timeframe", "Confidence"].map((h, i) => (
                 <th key={h} style={th(i > 1 ? { textAlign: "right" } : {})}>{h.toUpperCase()}</th>))}
             </tr></thead>
             <tbody>
@@ -619,7 +648,17 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
                             ? <div style={{ fontFamily: T.mono, fontSize: 9, color: T.red }} title="Risk exceeds reward to the primary target">⚠ R:R {(+rr).toFixed(1)}</div>
                             : null; })()}
                       </td>
-                      <td style={td({ fontFamily: T.mono, fontSize: 11, whiteSpace: "nowrap" })}>{zoneText(r.entry?.zone)}</td>
+                      <td style={td({ textAlign: "left" })}>
+                        <span style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: .8,
+                          color: r.direction === "sell" ? T.blue : T.green,
+                          border: "1px solid " + (r.direction === "sell" ? T.blue : T.green) + "55",
+                          borderRadius: 4, padding: "1px 5px" }}>
+                          {(r.direction || "buy").toUpperCase()}
+                        </span>
+                      </td>
+                      <td style={td({ fontFamily: T.mono, fontSize: 11, whiteSpace: "nowrap" })} title={r.exits?.actionLabel || "Entry"}>
+                        {zoneText(r.entry?.zone)}
+                      </td>
                       <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: T.ink })}>{rupee(r.price, 0)}</td>
                       <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, whiteSpace: "nowrap" })}>{zoneText(ex(r, "primary")?.zone)}</td>
                       <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: r.potential?.exhausted ? T.amber : T.green })}>
@@ -627,7 +666,9 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
                           ? <span title="Every target sits below the entry trigger — this is not a takeable plan" style={{ color: T.red, fontSize: 10 }}>targets below entry</span>
                           : (r.convergence ?? r.entry?.convergence) === 0
                           ? <span title="Methods do not converge — no reliable level" style={{ color: T.amber, fontSize: 10 }}>no level</span>
-                          : r.potential?.toPrimaryPct != null ? pctText(r.potential.toPrimaryPct) : "—"}
+                          : <span style={{ color: moveColour(ex(r, "primary"), r.direction) }}>
+                              {moveText(ex(r, "primary") || { movePct: r.potential?.toPrimaryPct }, r.direction)}
+                            </span>}
                       </td>
                       <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 10.5, color: T.mute, whiteSpace: "nowrap" })}>
                         {timeframeOf(r, profile)}

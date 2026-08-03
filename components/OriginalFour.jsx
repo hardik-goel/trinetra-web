@@ -38,8 +38,15 @@ export const ORIGINAL_FOUR = [
 
 const OPS = { gte: "≥", lte: "≤" };
 
-export default function OriginalFour({ criteria, metricLabel, delayed, onRestore, restoring }) {
+export default function OriginalFour({ originalFour, criteria, metricLabel, delayed, onRestore, restoring }) {
   const byId = Object.fromEntries((criteria || []).map(c => [c.id, c]));
+  /* The engine now reports these itself. Rendering its list rather than mine is
+     the point: what is displayed is read out of what runs, so the two cannot
+     drift. The local list stays only as a fallback for an older backend. */
+  const items = (originalFour && originalFour.length)
+    ? originalFour.map(o => ({ ...o, phrase: o.originalPhrase, id: o.id || o.criterionId }))
+    : ORIGINAL_FOUR.map(o => ({ ...o, status: null }));
+  const counted = items.filter(o => o.countsTowardLock !== false).length;
 
   return (
     <div style={{ fontFamily: T.sans, marginBottom: 16 }}>
@@ -56,20 +63,21 @@ export default function OriginalFour({ criteria, metricLabel, delayed, onRestore
       </div>
 
       <div style={{ border: "1px solid " + T.brass + "3A", borderRadius: 11, padding: 4, background: T.brassSoft }}>
-        {ORIGINAL_FOUR.map(o => {
-          const c = byId[o.id];
+        {items.map(o => {
+          const c = byId[o.id] || (o.checks ? { id: o.id || o.criterionId, checks: o.checks } : null);
           /* Three states, and the difference matters: dormant is not failing.
              Criterion 4 has no data on a delayed feed and is excluded from the
              lock entirely — surfaced here so the user can see that is by design. */
-          const dormant = o.needsLive && delayed;
-          const status = dormant ? "awaiting live data (Kite)"
+          const dormant = o.dormant ?? (o.needsLive && delayed);
+          const status = o.status || (dormant ? "awaiting live data (Kite)"
             : !c ? "not in the current set"
-            : c.enabled ? "active" : "disabled by you";
-          const colour = dormant ? T.amber : !c ? T.red : c.enabled ? T.green : T.dimSolid;
+            : c.enabled ? "active" : "disabled by you");
+          const colour = dormant ? T.amber : /not in|missing/i.test(status) ? T.red
+            : /active/i.test(status) ? T.green : T.dimSolid;
 
           return (
             <div key={o.id} style={{ display: "flex", gap: 11, padding: "10px 11px",
-              borderBottom: o.originalIndex < 4 ? "1px solid " + T.lineSoft : "none" }}>
+              borderBottom: o.originalIndex < items.length ? "1px solid " + T.lineSoft : "none" }}>
               <span style={{ fontFamily: T.mono, fontSize: 12, color: T.brass, minWidth: 14 }}>{o.originalIndex}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
@@ -86,7 +94,8 @@ export default function OriginalFour({ criteria, metricLabel, delayed, onRestore
                 </div>
                 {dormant && (
                   <div style={{ fontSize: 10.5, color: T.amber, marginTop: 4, lineHeight: 1.55 }}>
-                    {o.dormantReason}. It is dormant, not failing — excluded from the lock, so it can never block a signal.
+                    {o.dormantReason || "order-book depth is paid exchange data — unavailable on the free delayed feed"}.
+                    It is dormant, not failing — out of the denominator, so the lock reads {counted}/{counted} and a signal is never held back by it.
                   </div>
                 )}
               </div>
