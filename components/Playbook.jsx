@@ -202,6 +202,20 @@ const TIMEFRAME = {
 };
 const timeframeOf = (r, profile) => TIMEFRAME[r?.horizon || profile] || "—";
 
+/* A plan whose targets sit below its own entry trigger is not a plan: enter
+   where it says and you are underwater at the target by construction. The
+   percentages that make it look fine are measured from today's price, which is
+   a different trade from the one the entry rule defines. Say so rather than
+   render the tidy number. */
+function incoherence(r) {
+  const entry = r?.entry?.zone, primary = ex(r, "primary")?.zone;
+  if (!entry || !primary || r?.entry?.triggered) return null;
+  if (primary.high != null && entry.low != null && primary.high <= entry.low) {
+    return { kind: "targets-below-entry", entryLow: entry.low, primaryHigh: primary.high };
+  }
+  return null;
+}
+
 const STATES = {
   waiting:    { label: "below entry", colour: T.dimSolid },
   actionable: { label: "in entry zone", colour: T.green },
@@ -273,6 +287,29 @@ function Detail({ pb, onHold, held, busy, onAddCall }) {
   return (
     <div>
       {pb.reading && <div style={{ fontSize: 13, color: T.ink, lineHeight: 1.7, marginBottom: 12 }}>{pb.reading}</div>}
+
+      {(() => {
+        const bad = incoherence(pb);
+        if (!bad) return null;
+        return (
+          <div style={{ background: T.red + "12", border: "1px solid " + T.red + "55", borderLeft: "3px solid " + T.red,
+            borderRadius: 9, padding: "11px 13px", marginBottom: 12, fontSize: 12.5, color: T.red, lineHeight: 1.65 }}>
+            These levels do not describe a takeable trade. The entry only qualifies above {rupee(bad.entryLow, 0)},
+            but every target sits below it — the highest is {rupee(bad.primaryHigh, 0)}. Entering where the rule says
+            would put you under the target from the start. The percentage and risk-reward shown below are measured from
+            today&apos;s price, which is a different trade from the one this entry defines.
+          </div>
+        );
+      })()}
+
+      {/* What the row is actually proposing. The rest of the app names its
+          actions; this screen should not be the one that leaves it implied. */}
+      <div style={{ fontSize: 11.5, color: T.dimSolid, lineHeight: 1.55, marginBottom: 10 }}>
+        {pb.entry?.triggered
+          ? "Entry setup — the trigger has been met; consider entering within the zone."
+          : `Entry setup — not yet valid. Consider entering only above ${rupee(pb.entry?.zone?.high ?? pb.entry?.zone?.low, 0)}.`}
+        {" "}Never an instruction; the call is yours.
+      </div>
 
       {/* the chase warning outranks the numbers — it changes what they mean */}
       {pb.entry?.chasing && (
@@ -573,7 +610,9 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
                       <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: T.ink })}>{rupee(r.price, 0)}</td>
                       <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, whiteSpace: "nowrap" })}>{zoneText(ex(r, "primary")?.zone)}</td>
                       <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: r.potential?.exhausted ? T.amber : T.green })}>
-                        {(r.convergence ?? r.entry?.convergence) === 0
+                        {incoherence(r)
+                          ? <span title="Every target sits below the entry trigger — this is not a takeable plan" style={{ color: T.red, fontSize: 10 }}>targets below entry</span>
+                          : (r.convergence ?? r.entry?.convergence) === 0
                           ? <span title="Methods do not converge — no reliable level" style={{ color: T.amber, fontSize: 10 }}>no level</span>
                           : r.potential?.toPrimaryPct != null ? pctText(r.potential.toPrimaryPct) : "—"}
                       </td>
