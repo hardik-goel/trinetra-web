@@ -268,8 +268,8 @@ function Detail({ pb, onHold, held, busy, onAddCall }) {
       {pb.entry?.chasing && (
         <div style={{ background: T.red + "12", border: "1px solid " + T.red + "55", borderLeft: "3px solid " + T.red,
           borderRadius: 9, padding: "10px 12px", marginBottom: 12, fontSize: 12.5, color: T.red, lineHeight: 1.6 }}>
-          Price is {pctText(pb.entry.movedAlreadyPct)} past the trigger{pb.entry.chaseRiskPct != null ? ` — more than 1× ATR` : ""}.
-          Entering here changes the risk-reward materially against you.
+          {pb.entry.warning
+            || `Price is ${pctText(pb.entry.movedAlreadyPct)} past the trigger. Entering here changes the risk-reward materially against you.`}
         </div>
       )}
 
@@ -561,6 +561,11 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
                         {conv == null ? "—" : conv}
                       </td>
                       <td style={td({ fontSize: 11.5, minWidth: 180 })}>
+                        {r.entry?.chasing && (
+                          <div style={{ color: T.red, fontSize: 11, lineHeight: 1.5, marginBottom: 3 }}>
+                            ⚠ {r.entry.warning || "Price has run past the trigger — entering here is chasing."}
+                          </div>
+                        )}
                         {(() => { const rr = rrOf(r)?.toPrimary;
                           return rr != null && rr < 1
                             ? <div style={{ color: T.red, fontFamily: T.mono, fontSize: 10 }}>⚠ R:R {(+rr).toFixed(2)} — risk exceeds reward</div>
