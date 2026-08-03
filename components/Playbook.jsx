@@ -1,6 +1,7 @@
 "use client";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { deskApi, bandLabel, pctText, rupee } from "../lib/desk";
+import DataTable from "./DataTable";
 
 /* ================================================================
    THE PLAYBOOK — where to get in, where it is now, where to get out,
@@ -605,93 +606,73 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
       </div>
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
-        <select value={sort.key} onChange={e => setSort(s => ({ ...s, key: e.target.value }))}
-          style={{ background: T.bg, border: "1px solid " + T.line, color: T.ink, fontFamily: T.mono, fontSize: 11, borderRadius: 6, padding: "6px 8px" }}>
-          {SORTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-        </select>
-        <button onClick={() => setSort(s => ({ ...s, dir: s.dir === "asc" ? "desc" : "asc" }))} style={btn()}>{sort.dir === "asc" ? "▲" : "▼"}</button>
+        {/* Sorting moved into the table — every column, not six presets. The
+            state chips stay: they are a view of the book, not a column sort. */}
         {Object.entries(STATES).map(([k, v]) => (
           <button key={k} onClick={() => setStateFilter(f => (f === k ? "" : k))} style={chip(stateFilter === k)}>{v.label}</button>
         ))}
         <button onClick={load} style={{ ...btn(), marginLeft: "auto" }}>↻</button>
       </div>
 
-      {!rows ? <div style={{ fontSize: 12.5, color: T.dimSolid }}>Reading the playbook…</div>
-        : !sorted.length ? <div style={{ border: "1px dashed " + T.line, borderRadius: 10, padding: "18px 14px", fontSize: 12, color: T.dimSolid }}>
-            No symbols match this filter.
-          </div>
-        : (
-        <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, padding: 6, overflowX: "auto" }}>
-          <table style={{ borderCollapse: "collapse", width: "100%" }}>
-            <thead><tr>
-              {["Symbol", "Dir", "Entry / Sell at", "Current", "Target / Buy back", "Left", "Timeframe", "Confidence"].map((h, i) => (
-                <th key={h} style={th(i > 1 ? { textAlign: "right" } : {})}>{h.toUpperCase()}</th>))}
-            </tr></thead>
-            <tbody>
-              {sorted.map(r => {
+      {!rows ? <div style={{ fontSize: 12.5, color: T.dimSolid }}>Reading the playbook…</div> : (
+        <DataTable
+          dense
+          rows={sorted}
+          rowKey={r => r.symbol}
+          onRowClick={r => openRow(r.symbol)}
+          expanded={open}
+          empty="No symbols match this filter."
+          renderExpanded={r => (!detail
+            ? <span style={{ fontSize: 12, color: T.dimSolid }}>Reading the evidence…</span>
+            : detail.error
+              ? <span style={{ fontSize: 12, color: T.amber }}>Could not load the detail — {detail.error}</span>
+              : <Detail pb={detail} held={held?.has(r.symbol)} busy={holdBusy === r.symbol} onHold={onHold}
+                  onAddCall={async body => { await api.addAnalystCall(body); await openRow(r.symbol); await openRow(r.symbol); }} />)}
+          columns={[
+            { key: "symbol", label: "Symbol", type: "text", align: "left", mono: false,
+              render: r => {
                 const st = STATES[stateOf(r)];
-                const conv = r.convergence ?? r.entry?.convergence;
+                const rr = rrOf(r)?.toPrimary;
                 return (
-                  <React.Fragment key={r.symbol}>
-                    <tr onClick={() => openRow(r.symbol)} style={{ cursor: "pointer" }}>
-                      <td style={td({ fontFamily: T.mono, fontSize: 12, color: T.ink, whiteSpace: "nowrap" })}>
-                        {r.symbol}
-                        <div style={{ fontFamily: T.mono, fontSize: 8.5, color: st.colour }}>{st.label}</div>
-                        {/* The two warnings stay on the row. Burying the failure mode
-                            that costs most would make the app quieter about danger
-                            than about opportunity. */}
-                        {r.entry?.chasing && (
-                          <div style={{ fontFamily: T.mono, fontSize: 9, color: T.red }} title={r.entry.warning || "chasing"}>⚠ chasing</div>
-                        )}
-                        {(() => { const rr = rrOf(r)?.toPrimary;
-                          return rr != null && rr < 1
-                            ? <div style={{ fontFamily: T.mono, fontSize: 9, color: T.red }} title="Risk exceeds reward to the primary target">⚠ R:R {(+rr).toFixed(1)}</div>
-                            : null; })()}
-                      </td>
-                      <td style={td({ textAlign: "left" })}>
-                        <span style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: .8,
-                          color: r.direction === "sell" ? T.blue : T.green,
-                          border: "1px solid " + (r.direction === "sell" ? T.blue : T.green) + "55",
-                          borderRadius: 4, padding: "1px 5px" }}>
-                          {(r.direction || "buy").toUpperCase()}
-                        </span>
-                      </td>
-                      <td style={td({ fontFamily: T.mono, fontSize: 11, whiteSpace: "nowrap" })} title={r.exits?.actionLabel || "Entry"}>
-                        {zoneText(r.entry?.zone)}
-                      </td>
-                      <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: T.ink })}>{rupee(r.price, 0)}</td>
-                      <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, whiteSpace: "nowrap" })}>{zoneText(ex(r, "primary")?.zone)}</td>
-                      <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: r.potential?.exhausted ? T.amber : T.green })}>
-                        {incoherence(r)
-                          ? <span title="Every target sits below the entry trigger — this is not a takeable plan" style={{ color: T.red, fontSize: 10 }}>targets below entry</span>
-                          : (r.convergence ?? r.entry?.convergence) === 0
-                          ? <span title="Methods do not converge — no reliable level" style={{ color: T.amber, fontSize: 10 }}>no level</span>
-                          : <span style={{ color: moveColour(ex(r, "primary"), r.direction) }}>
-                              {moveText(ex(r, "primary") || { movePct: r.potential?.toPrimaryPct }, r.direction)}
-                            </span>}
-                      </td>
-                      <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 10.5, color: T.mute, whiteSpace: "nowrap" })}>
-                        {timeframeOf(r, profile)}
-                      </td>
-                      <td style={td({ textAlign: "right", whiteSpace: "nowrap" })}
-                        title="Tap for the evidence behind this number">
-                        <Confidence c={r.entry?.confidence} compact onExpand={() => openRow(r.symbol)} />
-                      </td>
-                    </tr>
-                    {open === r.symbol && (
-                      <tr><td colSpan={7} style={{ padding: "12px 10px", background: T.bg, borderBottom: "1px solid " + T.line }}>
-                        {!detail ? <span style={{ fontSize: 12, color: T.dimSolid }}>Reading the evidence…</span>
-                          : detail.error ? <span style={{ fontSize: 12, color: T.amber }}>Could not load the detail — {detail.error}</span>
-                          : <Detail pb={detail} held={held?.has(r.symbol)} busy={holdBusy === r.symbol} onHold={onHold}
-                              onAddCall={async body => { await api.addAnalystCall(body); await openRow(r.symbol); await openRow(r.symbol); }} />}
-                      </td></tr>
+                  <span>
+                    <span style={{ fontFamily: T.mono, color: T.ink }}>{r.symbol}</span>
+                    <div style={{ fontFamily: T.mono, fontSize: 8.5, color: st.colour }}>{st.label}</div>
+                    {/* These two stay on the row. Behind a tap, the app would be
+                        quieter about danger than about opportunity. */}
+                    {r.entry?.chasing && (
+                      <div style={{ fontFamily: T.mono, fontSize: 9, color: T.red }} title={r.entry.warning || "chasing"}>⚠ chasing</div>
                     )}
-                  </React.Fragment>
+                    {rr != null && rr < 1 && (
+                      <div style={{ fontFamily: T.mono, fontSize: 9, color: T.red }} title="Risk exceeds reward to the primary target">⚠ R:R {(+rr).toFixed(1)}</div>
+                    )}
+                  </span>
                 );
-              })}
-            </tbody>
-          </table>
-        </div>
+              } },
+            { key: "direction", label: "Dir", type: "cat", value: r => r.direction || "buy",
+              render: r => <span style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: .8,
+                color: r.direction === "sell" ? T.blue : T.green,
+                border: "1px solid " + (r.direction === "sell" ? T.blue : T.green) + "55",
+                borderRadius: 4, padding: "1px 5px" }}>{(r.direction || "buy").toUpperCase()}</span> },
+            { key: "entry", label: "Entry / Sell at", type: "number",
+              value: r => r.entry?.zone?.low, render: r => zoneText(r.entry?.zone) },
+            { key: "price", label: "Current", type: "number", render: r => rupee(r.price, 0) },
+            { key: "target", label: "Target / Buy back", type: "number",
+              value: r => ex(r, "primary")?.zone?.low, render: r => zoneText(ex(r, "primary")?.zone) },
+            { key: "left", label: "Left", type: "number",
+              // Magnitude: a sell capturing 5% ranks with a buy gaining 5%.
+              value: r => ex(r, "primary")?.movePct ?? (r.potential?.toPrimaryPct != null ? Math.abs(r.potential.toPrimaryPct) : null),
+              render: r => incoherence(r)
+                ? <span title="Every target sits below the entry trigger — this is not a takeable plan" style={{ color: T.red, fontSize: 10 }}>targets below entry</span>
+                : (r.convergence ?? r.entry?.convergence) === 0
+                ? <span title="Methods do not converge — no reliable level" style={{ color: T.amber, fontSize: 10 }}>no level</span>
+                : <span style={{ color: moveColour(ex(r, "primary"), r.direction) }}>
+                    {moveText(ex(r, "primary") || { movePct: r.potential?.toPrimaryPct }, r.direction)}
+                  </span> },
+            { key: "timeframe", label: "Timeframe", type: "cat", value: r => timeframeOf(r, profile) },
+            { key: "confidence", label: "Confidence", type: "number",
+              value: r => r.entry?.confidence?.score,
+              render: r => <Confidence c={r.entry?.confidence} compact onExpand={() => openRow(r.symbol)} /> },
+          ]} />
       )}
 
       <p style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.6, marginTop: 16, textAlign: "center" }}>
