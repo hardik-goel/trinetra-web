@@ -1,5 +1,6 @@
 "use client";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import DataTable from "./DataTable";
 import {
   accuracyText,
   fetchPravesh,
@@ -365,64 +366,33 @@ function HistoryView({ data }) {
         Apply-type calls count as right at a listing gain of +5% or better; avoid-type calls at +5% or worse.
         RISKY is excluded — it is a refusal to call, not a call.
       </div>
-      <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, padding: 6, overflowX: "auto" }}>
-        <table>
-          <thead>
-            <tr>
-              {["IPO", "Listed", "My call", "Listing gain", ""].map((h) => (
-                <th key={h} style={{ textAlign: "left", fontFamily: T.mono, fontSize: 9, letterSpacing: 1.4, color: T.dimSolid,
-                  fontWeight: 400, padding: "8px", borderBottom: "1px solid " + T.line }}>
-                  {h.toUpperCase()}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => {
-              const gain = r.listing_gain_pct;
-              const gainColor = gain == null ? T.mute : gain >= 0 ? T.green : T.red;
-              return (
-                <tr key={r.ipo_slug + i}>
-                  <td style={{ padding: 8, borderBottom: "1px solid " + T.lineSoft, fontSize: 12.5, color: T.ink }}>
-                    {r.ipo_name}
-                    {r.segment === "SME" && <span style={{ fontFamily: T.mono, fontSize: 8.5, color: T.amber, marginLeft: 6 }}>SME</span>}
-                    {r.flags?.length > 0 && <span title={r.flags.join(" · ")} style={{ color: T.red, marginLeft: 6 }}>⚠</span>}
-                  </td>
-                  <td style={{ padding: 8, borderBottom: "1px solid " + T.lineSoft, fontFamily: T.mono, fontSize: 11, color: T.mute }}>
-                    {fmtDate(r.listing_date)}
-                  </td>
-                  <td style={{ padding: 8, borderBottom: "1px solid " + T.lineSoft, fontSize: 12,
-                    color: VERDICT_COLOR[r.verdict_key] || T.mute, whiteSpace: "nowrap" }}>
-                    {r.verdict_key || "—"}
-                  </td>
-                  <td style={{ padding: 8, borderBottom: "1px solid " + T.lineSoft, fontFamily: T.mono, fontSize: 11.5, color: gainColor }}>
-                    {fmtPct(gain, true)}
-                  </td>
-                  <td style={{ padding: 8, borderBottom: "1px solid " + T.lineSoft, textAlign: "right", fontSize: 12,
-                    color: r.correct == null ? T.dimSolid : r.correct ? T.green : T.red }}>
-                    {r.correct == null ? "—" : r.correct ? "✓" : "✕"}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        dense
+        rowKey={r => r.ipo_slug}
+        rows={rows}
+        empty="No resolved calls yet."
+        columns={[
+          { key: "ipo_name", label: "IPO", type: "text", align: "left", mono: false,
+            render: r => <span style={{ color: T.ink }}>{r.ipo_name}
+              {r.segment === "SME" && <span style={{ fontFamily: T.mono, fontSize: 8.5, color: T.amber, marginLeft: 6 }}>SME</span>}
+              {r.flags?.length > 0 && <span title={r.flags.join(" · ")} style={{ color: T.red, marginLeft: 6 }}>⚠</span>}</span> },
+          { key: "listing_date", label: "Listed", type: "date", render: r => fmtDate(r.listing_date) },
+          { key: "verdict_key", label: "My call", type: "cat",
+            render: r => <span style={{ color: VERDICT_COLOR[r.verdict_key] || T.mute }}>{r.verdict_key || "—"}</span> },
+          { key: "listing_gain_pct", label: "Listing gain", type: "number",
+            render: r => <span style={{ color: r.listing_gain_pct == null ? T.mute : r.listing_gain_pct >= 0 ? T.green : T.red }}>
+              {fmtPct(r.listing_gain_pct, true)}</span> },
+          { key: "correct", label: "Right?", type: "bool",
+            render: r => <span style={{ color: r.correct == null ? T.dimSolid : r.correct ? T.green : T.red }}>
+              {r.correct == null ? "—" : r.correct ? "✓" : "✕"}</span> },
+        ]} />
     </section>
   );
 }
 
 function SourcesView({ data }) {
-  const [sort, setSort] = useState("accuracy");
-  const rows = useMemo(() => {
-    const copy = [...(data.leaderboard || [])];
-    copy.sort((a, b) => {
-      if (sort === "n") return (b.n_all || 0) - (a.n_all || 0);
-      if (sort === "name") return String(a.source_name).localeCompare(String(b.source_name));
-      return (b.accuracy_all || 0) - (a.accuracy_all || 0) || (b.n_all || 0) - (a.n_all || 0);
-    });
-    return copy;
-  }, [data.leaderboard, sort]);
+  // Sorting belongs to the table now — every column, not three preset buttons.
+  const rows = data.leaderboard || [];
 
   return (
     <section style={{ marginTop: 22 }}>
@@ -432,54 +402,26 @@ function SourcesView({ data }) {
         not ranked — a 100% from two calls is noise wearing a percentage.
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        {[["accuracy", "By accuracy"], ["n", "By sample size"], ["name", "A–Z"]].map(([k, label]) => (
-          <button key={k} onClick={() => setSort(k)} style={chip(sort === k)}>{label}</button>
-        ))}
-      </div>
-
-      {rows.length === 0 ? (
-        <div style={{ border: "1px dashed " + T.line, borderRadius: 12, padding: "24px 20px", textAlign: "center", fontSize: 12.5, color: T.mute }}>
-          Not enough resolved calls yet — the ledger needs n≥5 per source before it ranks anyone.
-        </div>
-      ) : (
-        <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, padding: 6, overflowX: "auto" }}>
-          <table>
-            <thead>
-              <tr>
-                {["Source", "All-time", "Last 15", "n"].map((h) => (
-                  <th key={h} style={{ textAlign: "left", fontFamily: T.mono, fontSize: 9, letterSpacing: 1.4, color: T.dimSolid,
-                    fontWeight: 400, padding: 8, borderBottom: "1px solid " + T.line }}>
-                    {h.toUpperCase()}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => {
-                const ranked = (r.n_all || 0) >= 5 && r.accuracy_all != null;
-                return (
-                  <tr key={r.source_name + i}>
-                    <td style={{ padding: 8, borderBottom: "1px solid " + T.lineSoft, fontSize: 12.5, color: T.ink }}>
-                      {r.source_name}
-                      {r.is_synthetic && <span style={{ fontFamily: T.mono, fontSize: 8.5, color: T.dimSolid, marginLeft: 6 }}>SIGNAL</span>}
-                    </td>
-                    <td style={{ padding: 8, borderBottom: "1px solid " + T.lineSoft, fontFamily: T.mono, fontSize: 11.5, color: ranked ? T.brass : T.dimSolid }}>
-                      {ranked ? `${Math.round(r.accuracy_all)}%` : "insufficient history"}
-                    </td>
-                    <td style={{ padding: 8, borderBottom: "1px solid " + T.lineSoft, fontFamily: T.mono, fontSize: 11.5, color: T.mute }}>
-                      {ranked && r.accuracy_recent != null ? `${Math.round(r.accuracy_recent)}%` : "—"}
-                    </td>
-                    <td style={{ padding: 8, borderBottom: "1px solid " + T.lineSoft, fontFamily: T.mono, fontSize: 11, color: T.dimSolid }}>
-                      {r.n_all}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <DataTable
+          dense
+          rowKey={r => r.source_name}
+          rows={rows}
+          empty="Not enough resolved calls yet."
+          columns={[
+            { key: "source_name", label: "Source", type: "text", align: "left", mono: false,
+              render: r => <span style={{ color: T.ink }}>{r.source_name}
+                {r.is_synthetic && <span style={{ fontFamily: T.mono, fontSize: 8.5, color: T.dimSolid, marginLeft: 6 }}>SIGNAL</span>}</span> },
+            { key: "accuracy_all", label: "All-time", type: "number",
+              // Below n=5 there is no rate — that sorts as unknown, never as zero.
+              value: r => ((r.n_all || 0) >= 5 && r.accuracy_all != null ? r.accuracy_all : null),
+              render: r => { const ranked = (r.n_all || 0) >= 5 && r.accuracy_all != null;
+                return <span style={{ color: ranked ? T.brass : T.dimSolid }}>
+                  {ranked ? `${Math.round(r.accuracy_all)}%` : "insufficient history"}</span>; } },
+            { key: "accuracy_recent", label: "Last 15", type: "number",
+              value: r => ((r.n_all || 0) >= 5 ? r.accuracy_recent : null),
+              render: r => ((r.n_all || 0) >= 5 && r.accuracy_recent != null ? `${Math.round(r.accuracy_recent)}%` : "—") },
+            { key: "n_all", label: "n", type: "number" },
+          ]} />
 
       <div style={{ marginTop: 14, background: T.raised, border: "1px solid " + T.line, borderRadius: 10, padding: "12px 14px" }}>
         <div style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1.6, color: T.dimSolid, marginBottom: 5 }}>
