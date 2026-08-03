@@ -137,6 +137,28 @@ moment are captured server-side, because "the reason you bought no longer holds"
 be detected later without a record of what that reason was. Quantity, stop and target
 are optional and editable afterwards in Positions.
 
+## Tables: one component, everywhere
+
+Every tabular view — Fundamentals, Playbook, Track Record's signals, combinations,
+per-criterion, paper trades and IPOs, and Pravesh's history and source leaderboard —
+renders through `components/DataTable.jsx`. Sorting is written once, so it behaves the
+same in all of them.
+
+- Click any header to cycle ascending → descending → none.
+- Filters per column type: numeric range, text contains, date range, multi-select for
+  categories, tri-state for booleans. They compose, show as chips, and clear in one tap.
+- **Nulls sort last in both directions** — "not established" is not a small number — and
+  a numeric filter excludes unknowns rather than treating them as zero.
+- **Potential and return columns sort on magnitude**, so a sell capturing a 5% fall ranks
+  alongside a buy gaining 5% instead of sinking to the bottom of a "best potential" sort.
+- `showing X of Y` is always visible. A filtered table that looks unfiltered is how
+  someone concludes a stock disappeared.
+- The first column pins on horizontal scroll, so the symbol stays in view on a phone.
+
+Two small tables stay inline by choice: Pravesh's per-IPO evidence table and the
+buy-vs-sell summary, both a handful of fixed rows inside a card where a filter bar would
+be furniture around nothing.
+
 ## Watchlist groups, filter and sort
 
 Above the watchlist sits a group selector — **All · Default · …** with counts.
