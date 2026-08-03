@@ -160,7 +160,18 @@ function CycleCard({ sig, onAct, busy }) {
         <span style={{ fontSize: 13.5, color: colour, fontWeight: 600 }}>{isSell ? "SELL" : "BUY"}</span>
         <span style={{ fontFamily: T.mono, fontSize: 13, color: T.ink }}>{sig.symbol}</span>
       </div>
-      <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>{sig.subtitle}</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap", marginTop: 2 }}>
+        <span style={{ fontSize: 12, color: T.mute }}>{sig.subtitle}</span>
+        {/* A buy-back on a position already partly sold is the half that closes
+            an open round trip — it outranks one that merely looks cheap. */}
+        {sig.priority === "high" && (
+          <span title="You are already partly sold here — this closes the round trip"
+            style={{ fontFamily: T.mono, fontSize: 8.5, letterSpacing: .8, color: T.green,
+              border: "1px solid " + T.green + "55", borderRadius: 4, padding: "1px 5px" }}>
+            CLOSES A ROUND TRIP
+          </span>
+        )}
+      </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 9 }}>
         {(sig.criteria || []).map((c, i) => (
@@ -463,7 +474,7 @@ export default function Positions({ backendUrl, live }) {
             <CycleCard key={sig.id} sig={sig} busy={state.busy}
               onAct={(s2, f) => act(() => api.sold(s2.holdingId, f == null ? {} : { qty: qtyFor(s2, f) }))} />
           ))}
-          {data.buyBack.map(sig => (
+          {[...data.buyBack].sort((a, b) => (b.priority === "high") - (a.priority === "high")).map(sig => (
             <CycleCard key={sig.id} sig={sig} busy={state.busy}
               onAct={(s2, f) => act(() => api.boughtBack(s2.holdingId, f == null ? {} : { qty: qtyFor(s2, f) }))} />
           ))}
