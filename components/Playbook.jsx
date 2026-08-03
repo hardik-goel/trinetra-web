@@ -62,15 +62,15 @@ function Reliability({ r }) {
   return <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.brass }}>{Math.round(r.rate)}% · n={r.n}</span>;
 }
 
-function Confidence({ c, compact }) {
+function Confidence({ c, compact, onExpand }) {
   const [open, setOpen] = useState(false);
   if (!c) return <span style={{ color: T.dimSolid, fontSize: 11 }}>—</span>;
   const colour = BAND[String(c.band).toLowerCase()] || T.mute;
   return (
     <span>
-      <button onClick={e => { e.stopPropagation(); setOpen(o => !o); }}
+      <button onClick={e => { if (compact && onExpand) { e.stopPropagation(); onExpand(); return; } e.stopPropagation(); setOpen(o => !o); }}
         style={{ all: "unset", cursor: "pointer", fontFamily: T.mono, fontSize: compact ? 11 : 12.5, color: colour }}>
-        {c.score} {bandLabel(c.band)} <span style={{ fontSize: 8.5, color: T.dimSolid }}>{open ? "▴" : "▾"}</span>
+        {c.score} {bandLabel(c.band)} <span style={{ fontSize: 8.5, color: T.dimSolid }}>{compact ? "why?" : (open ? "▴" : "▾")}</span>
       </button>
       {(c.caps || []).length > 0 && !compact && (
         <div style={{ fontFamily: T.mono, fontSize: 9, color: T.amber, marginTop: 3 }}>⚑ {c.caps.join(" · ")}</div>
@@ -191,6 +191,16 @@ function RangeBar({ pb, compact }) {
 const ex = (r, k) => r?.exits?.[k] ?? r?.[k];
 const exitConf = r => r?.exits?.confidence ?? r?.exitConfidence;
 const rrOf = r => r?.exits?.riskReward ?? r?.riskReward;
+
+/* HORIZON_SESSIONS in plain units. Sessions are the engine's unit; "3–5 days"
+   is the one a person plans around. */
+const TIMEFRAME = {
+  intraday:   "today",
+  swing:      "3–5 days",
+  positional: "2–4 weeks",
+  longterm:   "3+ months",
+};
+const timeframeOf = (r, profile) => TIMEFRAME[r?.horizon || profile] || "—";
 
 const STATES = {
   waiting:    { label: "below entry", colour: T.dimSolid },
@@ -442,8 +452,7 @@ function Detail({ pb, onHold, held, busy, onAddCall }) {
 
 /* ── shell ───────────────────────────────────────────────────────── */
 const SORTS = [
-  ["potential", "Potential left"], ["entryConf", "Entry confidence"], ["exitConf", "Exit confidence"],
-  ["convergence", "Convergence"], ["distance", "Distance to entry"], ["symbol", "Symbol"],
+  ["potential", "Potential left"], ["entryConf", "Confidence"], ["distance", "Distance to entry"], ["symbol", "Symbol"],
 ];
 
 export default function Playbook({ backendUrl, live, profileId, held, onHold, holdBusy }) {
@@ -511,8 +520,9 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
   return (
     <div style={{ fontFamily: T.sans, color: T.ink }}>
       <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginBottom: 10 }}>
-        Where to get in, where it is now, where to get out — each level clustered from independent methods.
-        <span style={{ color: T.dimSolid }}> Confidence measures how many methods agree, not whether the trade works.</span>
+        Where to get in, where it is now, where to get out, and what is left.
+        <span style={{ color: T.dimSolid }}> Tap a confidence score — or any row — for the evidence behind it. Confidence
+        measures how many methods agree, not whether the trade works.</span>
       </div>
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
@@ -535,8 +545,8 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
         <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 12, padding: 6, overflowX: "auto" }}>
           <table style={{ borderCollapse: "collapse", width: "100%" }}>
             <thead><tr>
-              {["Symbol", "Entry zone", "Current", "Primary exit", "Left", "Entry", "Exit", "Agree", "Reading"].map((h, i) => (
-                <th key={h} style={th(i > 1 && i < 8 ? { textAlign: "right" } : {})}>{h.toUpperCase()}</th>))}
+              {["Symbol", "Entry", "Current", "Exit", "Left", "Timeframe", "Confidence"].map((h, i) => (
+                <th key={h} style={th(i > 1 ? { textAlign: "right" } : {})}>{h.toUpperCase()}</th>))}
             </tr></thead>
             <tbody>
               {sorted.map(r => {
@@ -548,34 +558,35 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
                       <td style={td({ fontFamily: T.mono, fontSize: 12, color: T.ink, whiteSpace: "nowrap" })}>
                         {r.symbol}
                         <div style={{ fontFamily: T.mono, fontSize: 8.5, color: st.colour }}>{st.label}</div>
+                        {/* The two warnings stay on the row. Burying the failure mode
+                            that costs most would make the app quieter about danger
+                            than about opportunity. */}
+                        {r.entry?.chasing && (
+                          <div style={{ fontFamily: T.mono, fontSize: 9, color: T.red }} title={r.entry.warning || "chasing"}>⚠ chasing</div>
+                        )}
+                        {(() => { const rr = rrOf(r)?.toPrimary;
+                          return rr != null && rr < 1
+                            ? <div style={{ fontFamily: T.mono, fontSize: 9, color: T.red }} title="Risk exceeds reward to the primary target">⚠ R:R {(+rr).toFixed(1)}</div>
+                            : null; })()}
                       </td>
                       <td style={td({ fontFamily: T.mono, fontSize: 11, whiteSpace: "nowrap" })}>{zoneText(r.entry?.zone)}</td>
                       <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: T.ink })}>{rupee(r.price, 0)}</td>
                       <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, whiteSpace: "nowrap" })}>{zoneText(ex(r, "primary")?.zone)}</td>
                       <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: r.potential?.exhausted ? T.amber : T.green })}>
-                        {r.potential?.toPrimaryPct != null ? pctText(r.potential.toPrimaryPct) : "—"}
+                        {(r.convergence ?? r.entry?.convergence) === 0
+                          ? <span title="Methods do not converge — no reliable level" style={{ color: T.amber, fontSize: 10 }}>no level</span>
+                          : r.potential?.toPrimaryPct != null ? pctText(r.potential.toPrimaryPct) : "—"}
                       </td>
-                      <td style={td({ textAlign: "right" })}><Confidence c={r.entry?.confidence} compact /></td>
-                      <td style={td({ textAlign: "right" })}><Confidence c={exitConf(r)} compact /></td>
-                      <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 11, color: conv === 0 ? T.amber : T.brass })}>
-                        {conv == null ? "—" : conv}
+                      <td style={td({ textAlign: "right", fontFamily: T.mono, fontSize: 10.5, color: T.mute, whiteSpace: "nowrap" })}>
+                        {timeframeOf(r, profile)}
                       </td>
-                      <td style={td({ fontSize: 11.5, minWidth: 180 })}>
-                        {r.entry?.chasing && (
-                          <div style={{ color: T.red, fontSize: 11, lineHeight: 1.5, marginBottom: 3 }}>
-                            ⚠ {r.entry.warning || "Price has run past the trigger — entering here is chasing."}
-                          </div>
-                        )}
-                        {(() => { const rr = rrOf(r)?.toPrimary;
-                          return rr != null && rr < 1
-                            ? <div style={{ color: T.red, fontFamily: T.mono, fontSize: 10 }}>⚠ R:R {(+rr).toFixed(2)} — risk exceeds reward</div>
-                            : null; })()}
-                        {r.reading || "—"}
-                        <RangeBar pb={r} compact />
+                      <td style={td({ textAlign: "right", whiteSpace: "nowrap" })}
+                        title="Tap for the evidence behind this number">
+                        <Confidence c={r.entry?.confidence} compact onExpand={() => openRow(r.symbol)} />
                       </td>
                     </tr>
                     {open === r.symbol && (
-                      <tr><td colSpan={9} style={{ padding: "12px 10px", background: T.bg, borderBottom: "1px solid " + T.line }}>
+                      <tr><td colSpan={7} style={{ padding: "12px 10px", background: T.bg, borderBottom: "1px solid " + T.line }}>
                         {!detail ? <span style={{ fontSize: 12, color: T.dimSolid }}>Reading the evidence…</span>
                           : detail.error ? <span style={{ fontSize: 12, color: T.amber }}>Could not load the detail — {detail.error}</span>
                           : <Detail pb={detail} held={held?.has(r.symbol)} busy={holdBusy === r.symbol} onHold={onHold}

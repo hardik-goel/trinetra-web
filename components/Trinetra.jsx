@@ -336,7 +336,6 @@ export default function Trinetra() {
   const [profileSel, setProfileSel] = useState("swing");   // or "ALL"
   const [held, setHeld] = useState(() => new Set());       // symbols marked as holdings
   const [events, setEvents] = useState({});                // { SYMBOL: { events: [...], stale, source } }
-  const [lockInfo, setLockInfo] = useState({});            // symbol -> { lockQuality, lockedOn, notEvaluated, criteriaWarnings }
   const [holdBusy, setHoldBusy] = useState("");
 
   const [groups, setGroups] = useState(null);           // { name: [symbols] } | null until read
@@ -423,27 +422,21 @@ export default function Trinetra() {
     catch { /* optional surface */ }
   }, [desk]);
 
-  /* A 2-of-3 lock where one criterion had no data is not a 3-of-3 lock, and the
-     server is the only place that knows which it was. */
-  const loadLockInfo = useCallback(async () => {
-    if (!desk) return;
-    try {
-      const list = await desk.liveSignals();
-      const m = {};
-      for (const s of Array.isArray(list) ? list : []) {
-        m[s.symbol] = { lockQuality: s.lockQuality, lockedOn: s.lockedOn, notEvaluated: s.notEvaluated, criteriaWarnings: s.criteriaWarnings };
-      }
-      setLockInfo(m);
-    } catch { /* older backend: locks render without a quality mark */ }
-  }, [desk]);
+  useEffect(() => { if (liveBackend) { loadProfiles(); loadHeld(); loadEvents(); } },
+    [liveBackend, loadProfiles, loadHeld, loadEvents]);
 
-  useEffect(() => { if (liveBackend) { loadProfiles(); loadHeld(); loadEvents(); loadLockInfo(); } },
-    [liveBackend, loadProfiles, loadHeld, loadEvents, loadLockInfo]);
-  useEffect(() => {
-    if (!liveBackend) return;
-    const id = setInterval(loadLockInfo, 60_000);
-    return () => clearInterval(id);
-  }, [liveBackend, loadLockInfo]);
+  /* profileResults carries lockQuality per profile on every snapshot row, so the
+     live state covers stocks that are partially locked right now without ever
+     having fired — which a /signals poll cannot see. */
+  const lockInfo = useMemo(() => {
+    const key = profileSel === "ALL" ? "swing" : profileSel;
+    const m = {};
+    for (const s of stocks) {
+      const pr = s.profileResults?.[key];
+      if (pr?.lockQuality) m[s.symbol] = { lockQuality: pr.lockQuality, lockedOn: pr.lockedOn, notEvaluated: pr.notEvaluated, criteriaWarnings: pr.warnings || pr.criteriaWarnings };
+    }
+    return m;
+  }, [stocks, profileSel]);
 
   /* One tap. No form, no modal, no confirmation — the user does not paper-trade
      and will not fill anything in. Entry price and the locked criteria are
