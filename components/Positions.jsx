@@ -165,6 +165,11 @@ function HoldingRow({ h, exits, armed, onEdit, onDrop, busy }) {
 /* ── concentration + sizing ──────────────────────────────────────── */
 function Concentration({ conc, sizing, onSaveSizing, onBackup, onRestoreFile, busy }) {
   const [draft, setDraft] = useState(null);
+  /* Remembered on this device so the ritual is one tap next time, never shipped
+     in the bundle and never sent anywhere but /backup and /restore. */
+  const [token, setTokenState] = useState("");
+  useEffect(() => { try { setTokenState(localStorage.getItem("trinetra.backupToken") || ""); } catch {} }, []);
+  const setToken = v => { setTokenState(v); try { localStorage.setItem("trinetra.backupToken", v); } catch {} };
   const cfg = draft ?? sizing ?? {};
   const dirty = draft != null;
 
@@ -234,12 +239,19 @@ function Concentration({ conc, sizing, onSaveSizing, onBackup, onRestoreFile, bu
             Credentials are excluded by the backend. Download before every deploy; a redeploy without a persistent disk
             wipes all of it.
           </div>
+          <input type="password" value={token} onChange={e => setToken(e.target.value)}
+            placeholder="BACKUP_TOKEN" autoComplete="off"
+            style={{ ...inS, width: "100%", marginBottom: 8 }} />
+          <div style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.55, marginBottom: 9 }}>
+            The same value as <span style={{ fontFamily: T.mono }}>BACKUP_TOKEN</span> on the backend. It is kept on this
+            device only — baking it into the build would publish it to anyone who opens the page.
+          </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <button onClick={onBackup} disabled={busy} style={btn()}>Download backup</button>
+            <button onClick={() => onBackup(token)} disabled={busy || !token} style={{ ...btn(), opacity: token ? 1 : .4 }}>Download backup</button>
             <label style={{ ...btn(), display: "inline-flex", alignItems: "center" }}>
               Restore from file…
-              <input type="file" accept="application/json" style={{ display: "none" }}
-                onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) onRestoreFile(f); }} />
+              <input type="file" accept="application/json" style={{ display: "none" }} disabled={!token}
+                onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) onRestoreFile(f, token); }} />
             </label>
           </div>
         </div>
@@ -355,21 +367,21 @@ export default function Positions({ backendUrl, live }) {
 
       <Concentration conc={data.conc} sizing={data.sizing} busy={state.busy}
         onSaveSizing={cfg => act(() => api.saveSizing(cfg))}
-        onBackup={async () => {
+        onBackup={async (token) => {
           try {
-            const data = await api.backup();
+            const data = await api.backup(token);
             const a = document.createElement("a");
             a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
             a.download = `trinetra-backup-${new Date().toISOString().slice(0, 10)}.json`;
             a.click(); URL.revokeObjectURL(a.href);
           } catch (e) { setState({ busy: false, err: "Backup failed — " + e.message }); }
         }}
-        onRestoreFile={async (file) => {
+        onRestoreFile={async (file, token) => {
           // Two deliberate acts: choosing the file, then confirming the overwrite.
           if (!window.confirm(`Restore from ${file.name}? This overwrites holdings, history and trades on the backend. The current state is saved to pre-restore.json first.`)) return;
           try {
             const payload = JSON.parse(await file.text());
-            await api.restore(payload);
+            await api.restore(payload, token);
             await load();
             setState({ busy: false, err: "" });
           } catch (e) { setState({ busy: false, err: "Restore failed — " + e.message }); }

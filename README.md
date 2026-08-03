@@ -36,6 +36,13 @@ your tuned profiles; the backend excludes credentials from it. `Restore from fil
 asks for an explicit confirmation before overwriting, and the backend saves the current
 state to `pre-restore.json` first.
 
+Both routes require `BACKUP_TOKEN` (set it on Render; the backend fails closed with
+503 if it is unset and 401 on a wrong one). Paste the same value into the token field
+in the panel — it is stored **on your device only**. It deliberately does not come from
+a `NEXT_PUBLIC_*` variable: those are inlined into the JavaScript bundle, so shipping
+the token that way would publish it to anyone who opens the page, which is the exact
+exposure the token exists to close.
+
 > Do this **before every Render deploy**. Without a persistent disk mounted at `data/`,
 > a redeploy wipes all of it — and you cannot back up through an endpoint that is not
 > deployed yet.
