@@ -140,3 +140,61 @@ Every endpoint here is optional at runtime. A 404 must leave the rest of the das
 working: the tab renders its own "not available from this backend yet" state, exactly as
 the Track Record tab does in demo mode. No feature in this list may break the criteria
 engine, alerts, Pravesh, Track Record, watchlists or fundamentals.
+
+---
+
+## 7. Storage state
+
+```
+GET  /storage        → { mode: "durable" | "degraded" | "ephemeral", durable,
+                         repo, branch, lastPushAt, pushes, failures,
+                         pendingFiles: [], adoptedAtBoot: [], detail, fix }
+POST /storage/flush  → { pushed: [], failed: [], status }
+```
+
+Polled every two minutes, not read once. A store can be pushing cleanly when the page
+opens and be failing by the time an analyst call is typed into it, and that window is
+exactly when the banner needs to appear.
+
+`detail` and `fix` are rendered **verbatim**. The backend owns the description of its own
+failure; paraphrasing it here would mean two places describe the same fault and only one
+of them stays correct as the backend changes.
+
+Rendering rules:
+
+- **ephemeral** and **degraded** both render red, above the criteria-drift notice. Drifted
+  criteria produce worse signals; an ephemeral store loses the record of every signal
+  there has ever been.
+- **degraded is not the milder state.** A store that looks configured while it has quietly
+  stopped persisting is worse than none, because the user has reason to trust it. It names
+  `pendingFiles` — the files that exist on one instance's disk and nowhere else — and
+  offers `Retry push`.
+- Neither banner is dismissible. A dismissed warning about silent data loss is equivalent
+  to no warning: cleared, typed into for a week, then lost.
+- **durable** renders no banner, only a quiet line in the Positions backup block, so
+  "is this actually on" stays answerable without opening the backend.
+- `adoptedAtBoot` renders once per boot as "restored N files from the backup after a
+  restart" — the only visible proof the mechanism worked. Dismissible: permanent, it
+  would be noise within a day.
+
+When the store is durable the backup blurb stops saying a redeploy wipes everything,
+because it no longer does. A warning that has stopped being true trains the user to
+ignore the ones that still are.
+
+## 8. Cycle preview — development only
+
+```
+GET /cycle-signals/preview?symbol=SYM&kind=sell|buyBack
+  → { preview: true, notASignal, syntheticHolding: { used, entryPrice, caveat },
+      kind, symbol, signal: { … } }
+```
+
+The real cycle path with only the criteria lock bypassed, so the sell rendering can be
+checked against server output instead of a hand-written stub. Nothing is alerted and
+nothing enters the track record.
+
+**It is never rendered in the signal list.** `preview: true` and `notASignal` travel with
+the payload precisely so a preview cannot be mistaken for a fired signal, and the client
+method exists for verification only. When the symbol is not held, `holding.gainPct` is
+fabricated from a stand-in entry 20% below spot — every other number is real, and that
+one field proves nothing.
