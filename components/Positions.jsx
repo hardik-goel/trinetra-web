@@ -149,6 +149,16 @@ function QtyChips({ label, onPick, busy }) {
    Above holdings, below fired exit signals: a broken thesis outranks
    profit-taking. The subtitle is the only thing separating this from
    ⚠ CLOSE POSITION and is rendered verbatim, never truncated. */
+/* Risk:reward arrives in two shapes across the API — the playbook nests it as
+   { toPrimary }, the cycle sends a bare number. Normalise once here so a
+   reading that only handled one of them cannot silently drop the ratio. */
+const rrOf = (pricing) => {
+  const v = pricing?.riskReward;
+  if (v == null) return null;
+  const n = typeof v === "object" ? v.toPrimary : v;
+  return n == null || Number.isNaN(+n) ? null : +n;
+};
+
 function CycleCard({ sig, onAct, busy }) {
   const isSell = sig.kind === "sell";
   const colour = isSell ? T.amber : T.green;
@@ -199,9 +209,20 @@ function CycleCard({ sig, onAct, busy }) {
             <span style={{ color: sig.pricing.downward ? T.blue : T.green }}>
               {sig.pricing.movePct != null ? `${(+sig.pricing.movePct).toFixed(1)}% ${sig.pricing.arrow || (sig.pricing.downward ? "▼" : "▲")}` : "—"}
             </span>
-            {sig.pricing.riskReward?.toPrimary != null && (
-              <span style={{ color: sig.pricing.riskReward.toPrimary < 1 ? T.red : T.dimSolid }}>
-                R:R {(+sig.pricing.riskReward.toPrimary).toFixed(2)}{sig.pricing.riskReward.toPrimary < 1 ? " · risk exceeds reward" : ""}
+            {/* The playbook nests this as { toPrimary }; the cycle payload sends a
+                bare number. Reading only the nested form meant a sub-1:1 trim
+                rendered with no ratio and, worse, no warning — the one case where
+                the number most needs to be on screen. Take either shape. */}
+            {rrOf(sig.pricing) != null && (
+              <span style={{ color: rrOf(sig.pricing) < 1 ? T.red : T.dimSolid }}>
+                R:R {rrOf(sig.pricing).toFixed(2)}{rrOf(sig.pricing) < 1 ? " · risk exceeds reward" : ""}
+              </span>
+            )}
+            {/* Confidence qualifies the suggestion, so it travels with it rather
+                than being something the user has to go and look up. */}
+            {sig.pricing.confidence?.score != null && (
+              <span style={{ color: T.dimSolid }}>
+                {sig.pricing.confidence.score}%{sig.pricing.confidence.band ? ` ${sig.pricing.confidence.band}` : ""}
               </span>
             )}
           </div>
