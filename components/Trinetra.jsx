@@ -13,6 +13,7 @@ import Guide from "./Guide";
 import Playbook from "./Playbook";
 import DataTable from "./DataTable";
 import OriginalFour, { ORIGINAL_FOUR } from "./OriginalFour";
+import StorageBanner, { RestoredNote, StorageLine } from "./StorageBanner";
 
 /* ================================================================
    TRINETRA — the eye opens when everything aligns
@@ -427,8 +428,25 @@ export default function Trinetra() {
     catch { /* optional surface */ }
   }, [desk]);
 
-  useEffect(() => { if (liveBackend) { loadProfiles(); loadHeld(); loadEvents(); } },
-    [liveBackend, loadProfiles, loadHeld, loadEvents]);
+  /* Does anything the user types here survive a redeploy. Re-checked on a slow
+     interval rather than read once at load: a store can be pushing cleanly when
+     the page opens and have started failing by the time they enter a call into
+     it, and that window is exactly when the banner needs to appear. */
+  const [storage, setStorage] = useState(null);
+  const loadStorage = useCallback(async () => {
+    if (!desk) return;
+    try { setStorage(await desk.storage()); }
+    catch { setStorage(null); /* older backend has no store to report on */ }
+  }, [desk]);
+
+  useEffect(() => { if (liveBackend) { loadProfiles(); loadHeld(); loadEvents(); loadStorage(); } },
+    [liveBackend, loadProfiles, loadHeld, loadEvents, loadStorage]);
+
+  useEffect(() => {
+    if (!liveBackend) return;
+    const id = setInterval(loadStorage, 120000);
+    return () => clearInterval(id);
+  }, [liveBackend, loadStorage]);
 
   /* profileResults carries lockQuality per profile on every snapshot row, so the
      live state covers stocks that are partially locked right now without ever
@@ -947,6 +965,16 @@ export default function Trinetra() {
       </header>
 
       <main style={{ maxWidth: 860, margin: "0 auto", padding: "0 16px 80px" }}>
+        {/* Above the criteria notice on purpose: drifted criteria produce worse
+            signals, an ephemeral store loses the record of every signal there
+            has ever been. Not dismissible — see the note in StorageBanner. */}
+        <StorageBanner storage={storage} onFlush={async () => {
+          const r = await desk.flushStorage();
+          await loadStorage();
+          return r;
+        }} />
+        <RestoredNote storage={storage} />
+
         {/* The three criteria are the point of the instrument. If the active set
             has drifted, say so where it cannot be missed — and make going back
             one tap. Never silently overwrite what the user chose. */}
@@ -2062,7 +2090,7 @@ export default function Trinetra() {
       </Drawer>}
 
       {panel === "positions" && <Drawer wide title="Positions" onClose={() => setPanel(null)}>
-        <PraveshBoundary><Positions backendUrl={backendUrl} live={liveBackend} /></PraveshBoundary>
+        <PraveshBoundary><Positions backendUrl={backendUrl} live={liveBackend} storage={storage} /></PraveshBoundary>
       </Drawer>}
 
       {/* track record — mounted only while open; it reads server-side history,

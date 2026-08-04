@@ -1,6 +1,7 @@
 "use client";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { deskApi, pctText, rupee, SEVERITY_ORDER } from "../lib/desk";
+import { StorageLine } from "./StorageBanner";
 
 /* ================================================================
    POSITIONS — what is at risk right now.
@@ -321,7 +322,7 @@ function HoldingRow({ h, exits, armed, onEdit, onDrop, busy }) {
 }
 
 /* ── concentration + sizing ──────────────────────────────────────── */
-function Concentration({ conc, sizing, onSaveSizing, onBackup, onRestoreFile, busy }) {
+function Concentration({ conc, sizing, onSaveSizing, onBackup, onRestoreFile, busy, storage }) {
   const [draft, setDraft] = useState(null);
   /* Remembered on this device so the ritual is one tap next time, never shipped
      in the bundle and never sent anywhere but /backup and /restore. */
@@ -394,9 +395,15 @@ function Concentration({ conc, sizing, onSaveSizing, onBackup, onRestoreFile, bu
           <Label>Backup &amp; restore</Label>
           <div style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.6, marginBottom: 9 }}>
             Holdings, signal history, paper trades, IPO applications, watchlists and your tuned profiles — one file.
-            Credentials are excluded by the backend. Download before every deploy; a redeploy without a persistent disk
-            wipes all of it.
+            Credentials are excluded by the backend.
+            {/* Once the server keeps its own durable copy, "download before every
+                deploy" is no longer true, and repeating it would train the user to
+                ignore the line that still matters. */}
+            {storage?.mode === "durable"
+              ? " The server also keeps its own copy, so a redeploy no longer wipes this — the file is your off-server copy."
+              : " Download before every deploy; a redeploy without a durable store wipes all of it."}
           </div>
+          <StorageLine storage={storage} />
           <input type="password" value={token} onChange={e => setToken(e.target.value)}
             placeholder="BACKUP_TOKEN" autoComplete="off"
             style={{ ...inS, width: "100%", marginBottom: 8 }} />
@@ -419,7 +426,7 @@ function Concentration({ conc, sizing, onSaveSizing, onBackup, onRestoreFile, bu
 }
 
 /* ── shell ───────────────────────────────────────────────────────── */
-export default function Positions({ backendUrl, live }) {
+export default function Positions({ backendUrl, live, storage }) {
   const api = useMemo(() => (backendUrl ? deskApi(backendUrl) : null), [backendUrl]);
   const [data, setData] = useState({ holdings: [], exits: [], armed: [], sell: [], buyBack: [], suppressed: [], conc: null, sizing: null });
   const [state, setState] = useState({ busy: true, err: "" });
@@ -568,7 +575,7 @@ export default function Positions({ backendUrl, live }) {
           onDrop={id => act(() => api.dropHolding(id))} />
       ))}
 
-      <Concentration conc={data.conc} sizing={data.sizing} busy={state.busy}
+      <Concentration conc={data.conc} sizing={data.sizing} busy={state.busy} storage={storage}
         onSaveSizing={cfg => act(() => api.saveSizing(cfg))}
         onBackup={async (token) => {
           try {
