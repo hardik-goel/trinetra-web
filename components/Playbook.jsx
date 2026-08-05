@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { deskApi, bandLabel, pctText, rupee } from "../lib/desk";
 import DataTable from "./DataTable";
+import { RiskNote, ShortabilityChip, ShortabilityBlock, LotNote, isShort, DEFAULT_RISK_NOTE } from "./Shortability";
 
 /* ================================================================
    THE PLAYBOOK — where to get in, where it is now, where to get out,
@@ -225,6 +226,11 @@ const TIMEFRAME = {
    locked under anything at all. A row with no lock has no timeframe of its own,
    and a dash says that; inventing one dresses a non-signal as a swing trade. */
 const timeframeOf = (r) => {
+  /* A clamped short overrides everything else. The server shortened the horizon
+     because the trade cannot be held longer; showing where it locked would
+     describe a position that cannot be placed. */
+  const c = r?.horizonClamped;
+  if (c?.to) return (TIMEFRAME[c.to] || c.to) + " (clamped)";
   const locks = r?.lockedUnder || [];
   if (!locks.length) return "—";
   const seen = [...new Set(locks.map(l => TIMEFRAME[l.horizon] || l.horizon).filter(Boolean))];
@@ -236,9 +242,20 @@ const timeframeOf = (r) => {
    percentages that make it look fine are measured from today's price, which is
    a different trade from the one the entry rule defines. Say so rather than
    render the tidy number. */
+/* Direction decides what "incoherent" even means. On a long, a target under the
+   entry is unbuyable. On a short it is the trade: sell at 413, cover at 405.
+   Read direction-blind, this fired on every short and branded correct plans
+   un-takeable — the inverse of the error it exists to catch. */
 function incoherence(r) {
   const entry = r?.entry?.zone, primary = ex(r, "primary")?.zone;
   if (!entry || !primary || r?.entry?.triggered) return null;
+  if (isShort(r)) {
+    // A short is broken when the cover sits ABOVE where you sold.
+    if (primary.low != null && entry.high != null && primary.low >= entry.high) {
+      return { kind: "cover-above-entry", entryHigh: entry.high, primaryLow: primary.low };
+    }
+    return null;
+  }
   if (primary.high != null && entry.low != null && primary.high <= entry.low) {
     return { kind: "targets-below-entry", entryLow: entry.low, primaryHigh: primary.high };
   }
@@ -251,8 +268,20 @@ const STATES = {
   running:    { label: "running", colour: T.brass },
   exhausted:  { label: "at/beyond target", colour: T.amber },
 };
+/* Every comparison here inverts on a short: the entry sits ABOVE the price you
+   want and the target BELOW it, so "past the target" is a fall, not a rise.
+   Read long-side, a short that had already run to its cover level was reported
+   as still waiting to be entered — the most expensive way to be wrong, since it
+   invites entering a move that is over. */
 function stateOf(r) {
   const z = r.entry?.zone, p = r.price, primary = ex(r, "primary")?.zone;
+  if (p == null) return "waiting";
+  if (isShort(r)) {
+    if (primary && p <= (primary.high ?? -Infinity)) return "exhausted";
+    if (z && z.high != null && p > z.high) return "waiting";   // not yet risen to the sell zone
+    if (z && z.low != null && z.high != null && p >= z.low && p <= z.high) return "actionable";
+    return "running";
+  }
   if (primary && p >= (primary.low ?? Infinity)) return "exhausted";
   if (z && p < (z.low ?? -Infinity)) return "waiting";
   if (z && p >= z.low && p <= z.high) return "actionable";
@@ -303,7 +332,7 @@ function AddBrokerCall({ symbol, onAdd }) {
   );
 }
 
-function Detail({ pb, onHold, held, busy, onAddCall }) {
+function Detail({ pb, onHold, held, busy, onAddCall, shortability }) {
   const p = pb.potential || {};
   const big = (label, value, sub, colour) => (
     <div style={{ flex: "1 1 150px", background: T.card, border: "1px solid " + T.line, borderRadius: 10, padding: "11px 13px" }}>
@@ -353,6 +382,10 @@ function Detail({ pb, onHold, held, busy, onAddCall }) {
         {" "}Never an instruction; the call is yours.
       </div>
 
+      {/* On a short this outranks even the chase warning: chasing changes the
+          risk-reward, an unbounded downside changes what losing means. */}
+      {isShort(pb) && <RiskNote text={pb.riskNote} />}
+
       {/* the chase warning outranks the numbers — it changes what they mean */}
       {pb.entry?.chasing && (
         <div style={{ background: T.red + "12", border: "1px solid " + T.red + "55", borderLeft: "3px solid " + T.red,
@@ -362,10 +395,13 @@ function Detail({ pb, onHold, held, busy, onAddCall }) {
         </div>
       )}
 
+      {isShort(pb) && <ShortabilityBlock s={shortability || pb.shortability} clamped={pb.horizonClamped} />}
+      {isShort(pb) && <LotNote s={shortability || pb.shortability} />}
+
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {big(pb.exits?.actionLabel || "Entry zone", zoneText(pb.entry?.zone), pb.entry?.kind)}
+        {big(pb.actionLabel || pb.exits?.actionLabel || "Entry zone", zoneText(pb.entry?.zone), pb.entry?.kind)}
         {big("Current", rupee(pb.price, 0), pb.entry?.movedAlreadyPct != null ? `${pctText(pb.entry.movedAlreadyPct)} vs trigger` : null)}
-        {big(pb.exits?.targetLabel || "Primary exit", zoneText(ex(pb, "primary")?.zone), ex(pb, "primary")?.anchor)}
+        {big(pb.targetLabel || pb.exits?.targetLabel || "Primary exit", zoneText(ex(pb, "primary")?.zone), ex(pb, "primary")?.anchor)}
         {big(pb.direction === "sell" ? "Capture" : "Left to target",
           moveText(ex(pb, "primary") || { movePct: p.toPrimaryPct }, pb.direction),
           p.exhausted ? "typical move already spent" : (pb.direction === "sell" ? "the fall you would capture" : null),
@@ -565,6 +601,10 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
   const [detail, setDetail] = useState(null);
   const [sort, setSort] = useState({ key: "potential", dir: "desc" });
   const [stateFilter, setStateFilter] = useState("");
+  /* symbol -> shortability, filled from /shortability for rows that are shorts.
+     The rows themselves do not carry it yet; when they start to, row data wins
+     and this simply stops being consulted. */
+  const [shortInfo, setShortInfo] = useState({});
 
   const load = useCallback(async () => {
     if (!api) return;
@@ -573,6 +613,26 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
     catch (e) { setRows(null); setErr(e.message || "unavailable"); }
   }, [api, profile]);
   useEffect(() => { load(); }, [load]);
+
+  /* One lookup per short symbol, once. Whether a short can be carried overnight
+     decides whether the row is actionable at all, so it cannot wait for the
+     user to open a detail drawer. */
+  useEffect(() => {
+    if (!api || !rows) return;
+    const wanted = rows.filter(r => (r.direction || "").toLowerCase() === "sell" && !r.shortability)
+      .map(r => r.symbol).filter(sym => !(sym in shortInfo));
+    if (!wanted.length) return;
+    let live = true;
+    (async () => {
+      const found = {};
+      for (const sym of wanted.slice(0, 40)) {
+        try { found[sym] = await api.shortability(sym); }
+        catch { found[sym] = null; /* absent stays absent — never guessed */ }
+      }
+      if (live && Object.keys(found).length) setShortInfo(p => ({ ...p, ...found }));
+    })();
+    return () => { live = false; };
+  }, [api, rows]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openRow = async (symbol) => {
     if (open === symbol) { setOpen(null); return; }
@@ -620,6 +680,11 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
 
   /* Headers follow the rows. Each row is one direction and carries its own
      labels; a combined "Entry / Sell at" described neither accurately. */
+  const shortRows = sorted.filter(isShort);
+  const anyShort = shortRows.length > 0;
+  /* Playbook rows arrive with shortability null today, so fall back to the
+     standalone lookup this panel fetches per short symbol. */
+  const shortOf = r => r.shortability || shortInfo[r.symbol] || null;
   const uniq = (k, fb) => [...new Set(sorted.map(r => r[k] || fb(r)))];
   const actions = uniq("actionLabel", r => (r.direction === "sell" ? "Sell at" : "Entry"));
   const targets = uniq("targetLabel", r => (r.direction === "sell" ? "Buy back" : "Target"));
@@ -651,6 +716,10 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
         <button onClick={load} style={{ ...btn(), marginLeft: "auto" }}>↻</button>
       </div>
 
+      {/* Non-negotiable: on screen for as long as a short is, never behind a
+          tap. A long can go to zero; a short has no ceiling. */}
+      {anyShort && <RiskNote text={shortRows[0]?.riskNote} count={shortRows.length} />}
+
       {/* The call is ~35ms now; an interstitial would flash rather than inform. */}
       {!rows ? null : (
         <DataTable
@@ -665,6 +734,7 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
             : detail.error
               ? <span style={{ fontSize: 12, color: T.amber }}>Could not load the detail — {detail.error}</span>
               : <Detail pb={detail} held={held?.has(r.symbol)} busy={holdBusy === r.symbol} onHold={onHold}
+                  shortability={isShort(r) ? shortOf(r) : null}
                   onAddCall={async body => { await api.addAnalystCall(body); await openRow(r.symbol); await openRow(r.symbol); }} />)}
           columns={[
             { key: "symbol", label: "Symbol", type: "text", align: "left", mono: false,
@@ -695,6 +765,12 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
                every row it described. When the visible rows agree, the header
                states their shared label; when they are mixed, it stays neutral
                and each cell carries its own. */
+            /* Only meaningful for shorts, so it stays out of the way on a
+               long-only page rather than filling with dashes. */
+            ...(anyShort ? [{ key: "shortability", label: "Can hold?", type: "cat",
+              value: r => { const sa = shortOf(r); return !sa ? "—" : !sa.known ? "unknown" : sa.fno ? "F&O" : "intraday only"; },
+              render: r => <ShortabilityChip s={shortOf(r)} clamped={r.horizonClamped} />,
+              title: "Whether the short can be carried overnight. Cash-market shorts must be closed the same session." }] : []),
             { key: "entry", label: actionHeader, type: "number",
               value: r => r.entry?.zone?.low,
               render: r => <span>
@@ -714,7 +790,9 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
               // Magnitude: a sell capturing 5% ranks with a buy gaining 5%.
               value: r => ex(r, "primary")?.movePct ?? (r.potential?.toPrimaryPct != null ? Math.abs(r.potential.toPrimaryPct) : null),
               render: r => incoherence(r)
-                ? <span title="Every target sits below the entry trigger — this is not a takeable plan" style={{ color: T.red, fontSize: 10 }}>targets below entry</span>
+                ? (isShort(r)
+                    ? <span title="The cover level sits above where the short is entered — this is not a takeable plan" style={{ color: T.red, fontSize: 10 }}>cover above entry</span>
+                    : <span title="Every target sits below the entry trigger — this is not a takeable plan" style={{ color: T.red, fontSize: 10 }}>targets below entry</span>)
                 : (r.convergence ?? r.entry?.convergence) === 0
                 ? <span title="Methods do not converge — no reliable level" style={{ color: T.amber, fontSize: 10 }}>no level</span>
                 : <span style={{ color: moveColour(ex(r, "primary"), r.direction) }}>
