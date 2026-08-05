@@ -176,8 +176,17 @@ function demoTick(s) {
 }
 
 /* universe editing — mirrors the backend's normalizer so the UI can
-   pre-validate, pre-dedupe and enforce the cap before any request */
-const MAX_UNIVERSE = 200;
+   pre-validate and pre-dedupe before any request.
+
+   The cap is deliberately NOT here. A number hardcoded on this side goes stale
+   the moment the backend changes its own, and a stale copy that is too low does
+   not merely misinform — it blocks adds the server would have accepted. The cap
+   is learned from whatever the server says (an /universe/indices response, or
+   the rejection when one is actually hit) and is simply not shown until then. */
+const capFromError = (msg) => {
+  const m = /max\s+(\d+)/i.exec(String(msg || ""));
+  return m ? +m[1] : null;
+};
 const UNI_KEY = "trinetra.universe";
 const SYM_RE = /^[A-Z0-9&-]+$/; // NSE symbol charset
 const HEADER_RE = /^(SYMBOL|SYMBOLS|TICKER|NAME|SCRIP|STOCK|CODE)$/; // spreadsheet header rows
@@ -307,6 +316,11 @@ export default function Trinetra() {
   /* ── universe management (live backend only) ── */
   const [universe, setUniverse] = useState(null);      // server truth; null until fetched
   const [savedUni, setSavedUni] = useState(null);      // this browser's remembered list
+  const [cap, setCap] = useState(null);                // learned from the server, never assumed
+  /* Device-only, same value the Positions backup block writes. Read into state
+     so the storage poll and the Retry button agree on whether it exists. */
+  const [backupToken, setBackupToken] = useState("");
+  useEffect(() => { try { setBackupToken(localStorage.getItem("trinetra.backupToken") || ""); } catch {} }, [panel]);
   const [uni, setUni] = useState({ busy: false, err: "", msg: "" });
   const [addSym, setAddSym] = useState("");
   const [bulk, setBulk] = useState({ open: false, mode: "add", text: "" });
@@ -324,6 +338,7 @@ export default function Trinetra() {
   const [funds, setFunds] = useState({});
   const [fundBusy, setFundBusy] = useState("");  // symbol mid-refresh, or "all"
   const [fundMsg, setFundMsg] = useState("");
+  const [fundCoverage, setFundCoverage] = useState(null);
   /* ── watchlist groups, filter and sort ───────────────────────────
      Groups come from the backend (/watchlists); the union of every group is
      what the engine scans, so a group is a view, never a second universe.
@@ -355,11 +370,21 @@ export default function Trinetra() {
   const [fundDraft, setFundDraft] = useState({ metric: "roce", op: "gte", value: 20 });
 
   const loadFundamentals = useCallback(async url => {
+    const base = (url || backendUrl).replace(/\/$/, "");
     try {
-      const res = await fetch((url || backendUrl).replace(/\/$/, "") + "/fundamentals");
+      const res = await fetch(base + "/fundamentals");
       const j = await res.json();
       if (j && typeof j === "object" && !Array.isArray(j)) setFunds(j);
     } catch { /* the feed panel already reports connection trouble */ }
+    /* How much of the universe has fundamentals cached. Below 100% the engine
+       cannot evaluate the fundamentals criterion for the uncovered names and
+       reports it as notEvaluated — so a lock there rests on two criteria, not
+       three. Separate call, separate failure: an older backend without this
+       route must not take the matrix down with it. */
+    try {
+      const c = await fetch(base + "/fundamentals/coverage").then(r => (r.ok ? r.json() : null));
+      if (c && typeof c.pct === "number") setFundCoverage(c);
+    } catch { /* optional surface */ }
   }, [backendUrl]);
 
   // Scrapes finish in the background, so poll while the panel is open.
@@ -434,10 +459,26 @@ export default function Trinetra() {
      it, and that window is exactly when the banner needs to appear. */
   const [storage, setStorage] = useState(null);
   const loadStorage = useCallback(async () => {
-    if (!desk) return;
-    try { setStorage(await desk.storage()); }
-    catch { setStorage(null); /* older backend has no store to report on */ }
-  }, [desk]);
+    if (!desk || !backendUrl) return;
+    /* /storage is gated behind the backup token now, and rightly so — it names
+       the private repo and the files pending on disk. But whether anything is
+       being saved at all is not a secret, and a banner that only appears for
+       token-holders would leave everyone else silently unwarned. /health
+       carries the public subset (mode, durable, detail, fix); read that first
+       so the warning always renders, then enrich from /storage when this device
+       has the token, for pendingFiles, repo and the Retry button. */
+    let base = null;
+    try {
+      const h = await fetch(backendUrl.replace(/\/$/, "") + "/health", { cache: "no-store" }).then(r => r.json());
+      base = h?.storage || null;
+    } catch { /* offline — leave whatever was last known */ }
+
+    if (backupToken) {
+      try { setStorage({ ...(base || {}), ...(await desk.storage(backupToken)) }); return; }
+      catch { /* wrong or missing token: the public view is still worth showing */ }
+    }
+    setStorage(base);
+  }, [desk, backendUrl, backupToken]);
 
   useEffect(() => { if (liveBackend) { loadProfiles(); loadHeld(); loadEvents(); loadStorage(); } },
     [liveBackend, loadProfiles, loadHeld, loadEvents, loadStorage]);
@@ -516,13 +557,17 @@ export default function Trinetra() {
       setUni({ busy: false, err: "", msg: summarize ? summarize(j) : "" });
       return j;
     } catch (e) {
+      // The server states its own cap when one is hit. Learn it rather than
+      // carrying a guess that can only rot.
+      const learned = capFromError(e.message);
+      if (learned) setCap(learned);
       setUni({ busy: false, msg: "", err: /fetch|network/i.test(e.message)
         ? "Backend unreachable — a sleeping free instance takes ~30s to wake. Retry."
         : e.message });
-      // Roll the optimistic paint back to the last server-confirmed list, then
-      // re-read. Without the rollback a fully-down backend leaves a phantom
-      // edit on screen that also trips the restore banner.
-      if (savedUni) setUniverse(savedUni);
+      // Re-read from the backend rather than painting this browser's remembered
+      // list back over it. The backend is the durable copy now; treating a
+      // localStorage snapshot as the fallback is how a stale browser silently
+      // overwrites a list the server got right.
       loadUniverse();
       return null;
     }
@@ -560,19 +605,16 @@ export default function Trinetra() {
     }
     const fresh = parsed.filter(s => !uniList.includes(s));
     const dupes = parsed.length - fresh.length;
-    const room = MAX_UNIVERSE - uniList.length;
-    const dropped = Math.max(0, fresh.length - room);
-    const send = fresh.slice(0, Math.max(0, room));
-    if (!send.length) {
-      setUni({ busy: false, msg: "", err: dropped
-        ? `Universe is full (${MAX_UNIVERSE}). Remove some symbols first — ${dropped} not added.`
-        : `All ${parsed.length} already present.` });
+    if (!fresh.length) {
+      setUni({ busy: false, msg: "", err: `All ${parsed.length} already present.` });
       return;
     }
-    const j = await uniPost("/universe/bulk-add", { symbols: send }, r =>
-      `Added ${r.added}, skipped ${dupes + dropped + (r.skipped || 0)}` +
-      (dropped ? ` (${dropped} over the ${MAX_UNIVERSE} cap)` : dupes ? " (already present / invalid)" : ""));
-    if (j) { setBulk(b => ({ ...b, text: "" })); afterAdd(send); }
+    /* Send everything new and let the server apply its own cap. Trimming the
+       list here against a locally-held number is what silently dropped symbols
+       the backend would have taken. */
+    const j = await uniPost("/universe/bulk-add", { symbols: fresh }, r =>
+      `Added ${r.added}, skipped ${dupes + (r.skipped || 0)}` + (dupes ? " (already present / invalid)" : ""));
+    if (j) { setBulk(b => ({ ...b, text: "" })); afterAdd(fresh); }
   };
 
   const onFile = async e => {
@@ -968,11 +1010,13 @@ export default function Trinetra() {
         {/* Above the criteria notice on purpose: drifted criteria produce worse
             signals, an ephemeral store loses the record of every signal there
             has ever been. Not dismissible — see the note in StorageBanner. */}
-        <StorageBanner storage={storage} onFlush={async () => {
-          const r = await desk.flushStorage();
+        {/* Retry needs the backup token, same as /storage itself. Offering the
+            button without one would hand the user a 401 dressed as an action. */}
+        <StorageBanner storage={storage} onFlush={backupToken ? async () => {
+          const r = await desk.flushStorage(backupToken);
           await loadStorage();
           return r;
-        }} />
+        } : null} />
         <RestoredNote storage={storage} />
 
         {/* The three criteria are the point of the instrument. If the active set
@@ -1585,24 +1629,52 @@ export default function Trinetra() {
           if (st === "fetched") a.fetched++; else if (st === "partial") a.partial++; else a.unavailable++;
           return a;
         }, { fetched: 0, partial: 0, unavailable: 0 });
-        const canAdd = liveBackend && !!pending && !uniList.includes(pending) && uniList.length < MAX_UNIVERSE && !uni.busy;
+        const canAdd = liveBackend && !!pending && !uniList.includes(pending) && !uni.busy;
         const lock = !liveBackend || uni.busy; // demo mode is read-only
         return <Drawer title="Universe" onClose={() => setPanel(null)}>
           <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginBottom: 12 }}>
             {liveBackend
-              ? <>The {uniList.length} names your backend actually scans. Edits go straight to it — the watchlist picks them up on the next refresh, no reload. <span style={{ color: T.dimSolid }}>Cap {MAX_UNIVERSE}.</span></>
+              ? <>The {uniList.length} names your backend actually scans. Edits go straight to it — the watchlist picks them up on the next refresh, no reload.
+                  {cap != null && <span style={{ color: T.dimSolid }}> Cap {cap}.</span>}</>
               : <>These {uniList.length} names are the demo watchlist — recognizable, liquid mid/large-caps picked to make the instrument realistic. <span style={{ color: T.ink }}>They are not a recommendation and not your portfolio.</span> Connect a live feed to manage your own list from here.</>}
           </div>
 
-          {staleServerList && (
-            <div style={{ background: T.brassSoft, border: "1px solid " + T.brass + "3A", borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
-              <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.5 }}>
-                The backend is scanning {universe.length} symbols; this browser remembers {savedUni.length}. A free-tier redeploy resets the list.
+          {staleServerList && (() => {
+            /* What this browser remembers that the backend does not have. The
+               only defensible action here is adding those back.
+
+               There used to be a "Restore my N symbols" button that PUT the
+               remembered list over the server's. That inverts which copy is
+               authoritative: the backend now persists to a durable store and
+               holds symbols this browser has never seen, so replacing 303 with
+               a 23-symbol snapshot from localStorage destroys real state to
+               satisfy a stale cache. Additive only — nothing here can remove a
+               symbol, so there is nothing to confirm away. */
+            const missing = savedUni.filter(s => !uniList.includes(s));
+            const ephemeral = storage && storage.mode !== "durable";
+            return (
+              <div style={{ background: T.brassSoft, border: "1px solid " + T.brass + "3A", borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
+                <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.5 }}>
+                  The backend is scanning {universe.length} symbols; this browser remembers {savedUni.length}.
+                  {missing.length > 0
+                    ? <> {missing.length} of yours {missing.length === 1 ? "is" : "are"} not on the backend.</>
+                    : <> Everything this browser remembers is already there — the backend simply has more.</>}
+                </div>
+                {/* Only true while nothing is being persisted. Once the store is
+                    durable a redeploy no longer resets anything, and repeating
+                    the warning would teach the user to ignore it. */}
+                {ephemeral && storage.detail && (
+                  <div style={{ fontSize: 11, color: T.amber, lineHeight: 1.5, marginTop: 6 }}>{storage.detail}</div>
+                )}
+                {missing.length > 0 && (
+                  <button onClick={() => uniPost("/universe/bulk-add", { symbols: missing }, r => `Added ${r.added}.`)} disabled={uni.busy}
+                    style={{ ...btn(true), marginTop: 8 }}>
+                    Add my {missing.length} missing symbol{missing.length === 1 ? "" : "s"}
+                  </button>
+                )}
               </div>
-              <button onClick={() => uniPost("/universe", { symbols: savedUni }, r => `Restored ${r.symbols.length}.`)} disabled={uni.busy}
-                style={{ ...btn(true), marginTop: 8 }}>Restore my {savedUni.length} symbols</button>
-            </div>
-          )}
+            );
+          })()}
 
           {/* add one */}
           <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
@@ -1753,8 +1825,8 @@ export default function Trinetra() {
                   <button onClick={() => setBulk({ open: false, mode: "add", text: "" })} style={btn()}>Close</button>
                   <span style={{ fontSize: 10.5, color: T.dimSolid }}>
                     {preview.length ? `${preview.length} parsed · ${fresh.length} ${bulk.mode === "add" ? "new" : "present"}` : "nothing parsed yet"}
-                    {bulk.mode === "add" && fresh.length > MAX_UNIVERSE - uniList.length &&
-                      <span style={{ color: T.red }}> · {fresh.length - (MAX_UNIVERSE - uniList.length)} over the cap will be dropped</span>}
+                    {bulk.mode === "add" && cap != null && uniList.length + fresh.length > cap &&
+                      <span style={{ color: T.red }}> · {uniList.length + fresh.length - cap} over the {cap} cap — the server will drop those</span>}
                   </span>
                 </div>
               </div>;
@@ -1931,6 +2003,28 @@ export default function Trinetra() {
               : <>Demo fundamentals — simulated from the seed so the matrix is explorable. <span style={{ color: T.ink }}>They are not real
                   company numbers.</span> Connect a live backend to scrape the real ones.</>}
           </div>
+
+          {/* Coverage decides how many criteria a lock actually rests on. Below
+              100%, names without cached fundamentals have that criterion
+              reported as notEvaluated — the signal can still lock, but on two
+              of three. Stating the split is the difference between reading a
+              3/3 lock and a 2/3 one; leaving it out makes them look identical. */}
+          {liveBackend && fundCoverage && (
+            <div style={{ marginBottom: 10, padding: "9px 11px", borderRadius: 9,
+              background: fundCoverage.pct >= 100 ? T.raised : T.brassSoft,
+              border: "1px solid " + (fundCoverage.pct >= 100 ? T.line : T.brass + "3A") }}>
+              <div style={{ fontFamily: T.mono, fontSize: 10.5, color: fundCoverage.pct >= 100 ? T.dimSolid : T.brass }}>
+                FUNDAMENTALS CACHED — {fundCoverage.cached} of {fundCoverage.universe} ({fundCoverage.pct}%)
+              </div>
+              {fundCoverage.pct < 100 && (
+                <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.55, marginTop: 5 }}>
+                  {fundCoverage.missing} name{fundCoverage.missing === 1 ? " has" : "s have"} no fundamentals yet. For those the
+                  fundamentals criterion is <span style={{ fontFamily: T.mono, color: T.amber }}>notEvaluated</span> — a signal can
+                  still lock, but on two criteria rather than three. Scraping continues in the background.
+                </div>
+              )}
+            </div>
+          )}
 
           {/* pass summary + provenance */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
