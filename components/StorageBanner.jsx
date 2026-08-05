@@ -53,6 +53,10 @@ export default function StorageBanner({ storage, onFlush }) {
      the user has reason to trust it. */
   const tone = T.red, wash = T.redSoft;
   const pending = storage.pendingFiles || [];
+  /* Configured but with no successful push behind it. Only meaningful once the
+     token-gated view has loaded — the public /health subset carries no
+     lastPushAt, and absence there must not be read as "never". */
+  const neverPushed = "lastPushAt" in storage && !storage.lastPushAt;
 
   const retry = async () => {
     setBusy(true); setResult(null);
@@ -77,8 +81,12 @@ export default function StorageBanner({ storage, onFlush }) {
           {degraded ? "STORAGE FAILING" : "NOTHING IS SAVED"}
         </span>
         <span style={{ fontSize: 12.5, color: T.ink, fontWeight: 500 }}>
+          {/* A store that stopped and a store that never started are different
+              faults with different fixes — "stopped" sends you looking for what
+              changed, when the answer is that it has never once worked. */}
           {degraded
-            ? "The backup has stopped persisting."
+            ? (neverPushed ? "The backup has never worked — nothing has ever been saved."
+                           : "The backup has stopped persisting.")
             : "Everything you have entered is lost on the next redeploy."}
         </span>
       </div>
@@ -102,9 +110,27 @@ export default function StorageBanner({ storage, onFlush }) {
         </div>
       )}
 
-      {storage.fix && (
+      {/* The actual GitHub response, verbatim. Diagnosing this previously meant
+          curling /storage with the backup token — which put a credential on a
+          clipboard to read a diagnostic. The error is not the secret; the token
+          is. Show the error. */}
+      {storage.lastError && (
+        <div style={{ marginTop: 8, padding: "7px 9px", borderRadius: 7, background: "#00000033", border: "1px solid " + T.line }}>
+          <div style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1.1, color: T.dimSolid, marginBottom: 4 }}>
+            WHAT THE STORE LAST GOT BACK
+          </div>
+          <div style={{ fontFamily: T.mono, fontSize: 10, color: T.ink, lineHeight: 1.65, wordBreak: "break-word" }}>
+            {storage.lastError}
+          </div>
+        </div>
+      )}
+
+      {/* hint is the specific remedy for the observed failure; fix is the
+          generic setup instruction. When both exist the hint is the one that
+          applies, so it leads. */}
+      {(storage.hint || storage.fix) && (
         <div style={{ marginTop: 8, fontFamily: T.mono, fontSize: 10.5, color: T.brass, lineHeight: 1.7 }}>
-          {storage.fix}
+          {storage.hint || storage.fix}
         </div>
       )}
 
@@ -112,7 +138,10 @@ export default function StorageBanner({ storage, onFlush }) {
         {storage.repo && (
           <span style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid }}>
             {storage.repo}{storage.branch ? `#${storage.branch}` : ""}
+            {storage.branchSource ? ` (${storage.branchSource})` : ""}
             {storage.failures ? ` · ${storage.failures} failure${storage.failures === 1 ? "" : "s"}` : ""}
+            {/* "never pushed" and "last push 4h ago" are different diagnoses:
+                one is a store that has never worked, the other one that stopped. */}
             {storage.lastPushAt ? ` · last push ${ago(storage.lastPushAt)}` : " · never pushed"}
           </span>
         )}
