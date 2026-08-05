@@ -218,7 +218,18 @@ const TIMEFRAME = {
   positional: "2–4 weeks",
   longterm:   "3+ months",
 };
-const timeframeOf = (r, profile) => TIMEFRAME[r?.horizon || profile] || "—";
+
+/* The timeframe of a row is the horizon of the profile it actually locked
+   under — not the profile that was asked for. Reading r.horizon made every row
+   echo ?profile=swing back as "3–5 days", including the 279 of 303 that had not
+   locked under anything at all. A row with no lock has no timeframe of its own,
+   and a dash says that; inventing one dresses a non-signal as a swing trade. */
+const timeframeOf = (r) => {
+  const locks = r?.lockedUnder || [];
+  if (!locks.length) return "—";
+  const seen = [...new Set(locks.map(l => TIMEFRAME[l.horizon] || l.horizon).filter(Boolean))];
+  return seen.length ? seen.join(" · ") : "—";
+};
 
 /* A plan whose targets sit below its own entry trigger is not a plan: enter
    where it says and you are underwater at the target by construction. The
@@ -535,9 +546,19 @@ const SORTS = [
   ["potential", "Potential left"], ["entryConf", "Confidence"], ["distance", "Distance to entry"], ["symbol", "Symbol"],
 ];
 
-export default function Playbook({ backendUrl, live, profileId, held, onHold, holdBusy }) {
+export default function Playbook({ backendUrl, live, profileId, profiles, held, onHold, holdBusy }) {
   const api = useMemo(() => (backendUrl ? deskApi(backendUrl) : null), [backendUrl]);
-  const profile = profileId && profileId !== "ALL" ? profileId : "swing";
+  /* The panel answers "what is the plan under this profile". Without a selector
+     it answered that once, for whatever the app happened to be showing, and
+     there was no way to ask it about another. Seeded from the app's profile so
+     the two agree on open, then owned here. */
+  const fallback = profileId && profileId !== "ALL" ? profileId : "swing";
+  const [profile, setProfile] = useState(fallback);
+  useEffect(() => { setProfile(fallback); }, [fallback]);
+  /* Holdings-only profiles have no watchlist-wide playbook to show. */
+  const choices = Object.entries(profiles || {})
+    .filter(([, p]) => p?.appliesTo !== "holdings")
+    .map(([id, p]) => ({ id, name: p?.name || id }));
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState("");
   const [open, setOpen] = useState(null);
@@ -597,6 +618,15 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
     return sort.dir === "asc" ? av - bv : bv - av;
   });
 
+  /* Headers follow the rows. Each row is one direction and carries its own
+     labels; a combined "Entry / Sell at" described neither accurately. */
+  const uniq = (k, fb) => [...new Set(sorted.map(r => r[k] || fb(r)))];
+  const actions = uniq("actionLabel", r => (r.direction === "sell" ? "Sell at" : "Entry"));
+  const targets = uniq("targetLabel", r => (r.direction === "sell" ? "Buy back" : "Target"));
+  const mixedAction = actions.length > 1, mixedTarget = targets.length > 1;
+  const actionHeader = mixedAction ? "Action" : (actions[0] || "Entry");
+  const targetHeader = mixedTarget ? "Target" : (targets[0] || "Target");
+
   return (
     <div style={{ fontFamily: T.sans, color: T.ink }}>
       <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginBottom: 10 }}>
@@ -608,13 +638,21 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
         {/* Sorting moved into the table — every column, not six presets. The
             state chips stay: they are a view of the book, not a column sort. */}
+        {choices.length > 0 && (
+          <select value={profile} onChange={e => setProfile(e.target.value)}
+            style={{ ...chip(true), fontFamily: T.sans, appearance: "auto" }}
+            title="Which profile's plan to show. Timeframes come from where each row actually locked, not from this.">
+            {choices.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        )}
         {Object.entries(STATES).map(([k, v]) => (
           <button key={k} onClick={() => setStateFilter(f => (f === k ? "" : k))} style={chip(stateFilter === k)}>{v.label}</button>
         ))}
         <button onClick={load} style={{ ...btn(), marginLeft: "auto" }}>↻</button>
       </div>
 
-      {!rows ? <div style={{ fontSize: 12.5, color: T.dimSolid }}>Reading the playbook…</div> : (
+      {/* The call is ~35ms now; an interstitial would flash rather than inform. */}
+      {!rows ? null : (
         <DataTable
           dense
           rows={sorted}
@@ -653,11 +691,25 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
                 color: r.direction === "sell" ? T.blue : T.green,
                 border: "1px solid " + (r.direction === "sell" ? T.blue : T.green) + "55",
                 borderRadius: 4, padding: "1px 5px" }}>{(r.direction || "buy").toUpperCase()}</span> },
-            { key: "entry", label: "Entry / Sell at", type: "number",
-              value: r => r.entry?.zone?.low, render: r => zoneText(r.entry?.zone) },
+            /* Each row is one direction, so a combined header was wrong on
+               every row it described. When the visible rows agree, the header
+               states their shared label; when they are mixed, it stays neutral
+               and each cell carries its own. */
+            { key: "entry", label: actionHeader, type: "number",
+              value: r => r.entry?.zone?.low,
+              render: r => <span>
+                {mixedAction && <span style={{ fontFamily: T.mono, fontSize: 8.5, color: T.dimSolid, display: "block" }}>
+                  {r.actionLabel || (r.direction === "sell" ? "Sell at" : "Entry")}</span>}
+                {zoneText(r.entry?.zone)}
+              </span> },
             { key: "price", label: "Current", type: "number", render: r => rupee(r.price, 0) },
-            { key: "target", label: "Target / Buy back", type: "number",
-              value: r => ex(r, "primary")?.zone?.low, render: r => zoneText(ex(r, "primary")?.zone) },
+            { key: "target", label: targetHeader, type: "number",
+              value: r => ex(r, "primary")?.zone?.low,
+              render: r => <span>
+                {mixedTarget && <span style={{ fontFamily: T.mono, fontSize: 8.5, color: T.dimSolid, display: "block" }}>
+                  {r.targetLabel || (r.direction === "sell" ? "Buy back" : "Target")}</span>}
+                {zoneText(ex(r, "primary")?.zone)}
+              </span> },
             { key: "left", label: "Left", type: "number",
               // Magnitude: a sell capturing 5% ranks with a buy gaining 5%.
               value: r => ex(r, "primary")?.movePct ?? (r.potential?.toPrimaryPct != null ? Math.abs(r.potential.toPrimaryPct) : null),
@@ -668,7 +720,8 @@ export default function Playbook({ backendUrl, live, profileId, held, onHold, ho
                 : <span style={{ color: moveColour(ex(r, "primary"), r.direction) }}>
                     {moveText(ex(r, "primary") || { movePct: r.potential?.toPrimaryPct }, r.direction)}
                   </span> },
-            { key: "timeframe", label: "Timeframe", type: "cat", value: r => timeframeOf(r, profile) },
+            { key: "timeframe", label: "Timeframe", type: "cat", value: r => timeframeOf(r),
+              title: "The horizon of the profile this row actually locked under. A dash means it has not locked under any." },
             { key: "confidence", label: "Confidence", type: "number",
               value: r => r.entry?.confidence?.score,
               render: r => <Confidence c={r.entry?.confidence} compact onExpand={() => openRow(r.symbol)} /> },

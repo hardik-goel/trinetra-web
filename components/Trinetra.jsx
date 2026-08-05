@@ -2140,7 +2140,7 @@ export default function Trinetra() {
 
       {panel === "playbook" && <Drawer wide title="Playbook" onClose={() => setPanel(null)}>
         <PraveshBoundary>
-          <Playbook backendUrl={backendUrl} live={liveBackend} profileId={profileSel}
+          <Playbook backendUrl={backendUrl} live={liveBackend} profileId={profileSel} profiles={profiles}
             held={held} onHold={markHolding} holdBusy={holdBusy} />
         </PraveshBoundary>
       </Drawer>}
