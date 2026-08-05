@@ -660,6 +660,21 @@ export default function Trinetra() {
     });
   }, []);
 
+  /* One control used to drive two very different costs. A demo tick is local
+     arithmetic and free at 3s; a live poll re-downloads the whole snapshot,
+     which is ~11 KB per symbol — 3.4 MB at 303 names, 11 MB at 1000. At the
+     3s default that is ~68 MB a minute on a phone.
+
+     And it buys nothing: the feed is fifteen minutes delayed, so polling every
+     three seconds fetches identical bytes some three hundred times per actual
+     refresh. The floor is derived from the feed's own staleness rather than
+     picked — faster than the data changes is not fresher, only more expensive. */
+  const pollSeconds = useMemo(() => {
+    if (mode === "demo") return interval_;                 // local, costs nothing
+    const floor = conn.delayed ? 60 : 5;
+    return Math.max(interval_, floor);
+  }, [mode, interval_, conn.delayed]);
+
   useEffect(() => {
     if (paused) return;
     const id = setInterval(async () => {
@@ -676,9 +691,9 @@ export default function Trinetra() {
           fireAlerts(n); return n;
         });
       } catch { setConn(c => ({ ...c, state: "error" })); }
-    }, interval_ * 1000);
+    }, pollSeconds * 1000);
     return () => clearInterval(id);
-  }, [paused, interval_, fireAlerts]);
+  }, [paused, pollSeconds, fireAlerts]);
 
   /* Credentials are only ever sent when the user actually typed them. The panel
      never holds the real token — /config returns a mask — so posting the fields
@@ -1508,6 +1523,16 @@ export default function Trinetra() {
           <span style={{ color: T.mute, fontSize: 12 }}>Scan every (seconds)</span>
           <input type="number" min="1" value={interval_} onChange={e => setInterval_(Math.max(1, +e.target.value))} style={{ ...inS, width: 70, textAlign: "right" }} />
         </label>
+        {/* Say when the setting is not what is happening. A control that
+            silently ignores its own value is worse than one that has a floor. */}
+        {pollSeconds !== interval_ && (
+          <div style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.6, marginTop: 6 }}>
+            Actually polling every <span style={{ fontFamily: T.mono, color: T.brass }}>{pollSeconds}s</span>. The feed is
+            ~15 minutes delayed, so a faster scan re-downloads the same numbers — {uniList.length} symbols is about{" "}
+            <span style={{ fontFamily: T.mono }}>{(uniList.length * 11 / 1024).toFixed(1)} MB</span> a poll, and nothing
+            in it would have changed.
+          </div>
+        )}
       </Drawer>}
 
       {/* alerts panel */}
