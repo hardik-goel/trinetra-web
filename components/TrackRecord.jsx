@@ -318,9 +318,28 @@ function SignalsView({ signals, trades, onLog, assumptions, stats }) {
               {(r.direction || "buy").toUpperCase()}</span> },
           { key: "firedAt", label: "Fired", type: "date", value: r => r.firedAt, render: r => shortDate(r.firedAt) },
           { key: "price", label: "Price", type: "number", render: r => inr(r.price, 2) },
-          { key: "combo", label: "Locked", type: "cat", align: "left",
-            render: r => <span style={{ color: T.brass }} title={(r.criteria || []).filter(c => c.pass).map(c => c.name).join(" · ")}>
-              {r.combo} <span style={{ color: T.dimSolid }}>{r.count}/{r.total}</span></span> },
+          /* "O+R+V+W 4/4" reads like the founding four criteria and is actually
+             the Intraday profile's four — it caused exactly that confusion.
+             The initials are a grouping key, not a label, so name the profile
+             and spell the criteria out. combo stays as the filter/sort value so
+             grouping still works on it. */
+          { key: "combo", label: "Locked on", type: "cat", align: "left",
+            value: r => r.combo,
+            render: r => {
+              const names = r.lockedOn?.length ? r.lockedOn
+                : (r.criteria || []).filter(c => c.pass).map(c => c.name);
+              return (
+                <span title={r.combo}>
+                  <span style={{ color: T.brass }}>{r.profileName || r.profileId || "—"}</span>
+                  <span style={{ color: T.dimSolid }}> {r.count}/{r.total}</span>
+                  {names.length > 0 && (
+                    <div style={{ fontSize: 9.5, color: T.mute, lineHeight: 1.45, marginTop: 2, maxWidth: 260 }}>
+                      {names.join(", ")}
+                    </div>
+                  )}
+                </span>
+              );
+            } },
           ...HORIZONS.map(d => ({
             key: `ret${d}d`, label: `${d}d`, type: "number",
             // Magnitude, so a sell that fell 5% ranks with a buy that rose 5%.
@@ -356,7 +375,18 @@ function SignalsView({ signals, trades, onLog, assumptions, stats }) {
           empty="No combinations yet."
           columns={[
             { key: "combo", label: "Combination", type: "text", align: "left", mono: false,
-              render: r => <span style={{ fontFamily: T.mono, color: T.ink }}>{r.combo} <span style={{ color: T.dimSolid }}>({r.count})</span></span> },
+              value: r => r.combo,
+              render: r => (
+                <span>
+                  <span style={{ fontFamily: T.mono, color: T.ink }}>{r.profileName || r.combo}</span>
+                  <span style={{ color: T.dimSolid }}> ({r.count})</span>
+                  {r.lockedOn?.length > 0 && (
+                    <div style={{ fontSize: 9.5, color: T.mute, lineHeight: 1.45, marginTop: 2, maxWidth: 280 }}>
+                      {r.lockedOn.join(", ")}
+                    </div>
+                  )}
+                </span>
+              ) },
             { key: "n", label: "Signals", type: "number" },
             { key: "w7", label: "7d win", type: "number",
               value: r => (r.horizons.ret7d.n >= MIN_SIGNALS ? r.horizons.ret7d.winRate : null),

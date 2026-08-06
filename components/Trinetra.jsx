@@ -14,6 +14,7 @@ import Playbook from "./Playbook";
 import DataTable from "./DataTable";
 import OriginalFour, { ORIGINAL_FOUR } from "./OriginalFour";
 import StorageBanner, { RestoredNote, StorageLine } from "./StorageBanner";
+import StockLookup from "./StockLookup";
 
 /* ================================================================
    TRINETRA — the eye opens when everything aligns
@@ -317,6 +318,7 @@ export default function Trinetra() {
   const [universe, setUniverse] = useState(null);      // server truth; null until fetched
   const [savedUni, setSavedUni] = useState(null);      // this browser's remembered list
   const [cap, setCap] = useState(null);                // learned from the server, never assumed
+  const [lookupSymbol, setLookupSymbol] = useState("");
   /* Device-only, same value the Positions backup block writes. Read into state
      so the storage poll and the Retry button agree on whether it exists. */
   const [backupToken, setBackupToken] = useState("");
@@ -1014,6 +1016,11 @@ export default function Trinetra() {
               {mode === "live" ? (conn.state === "live" ? "Live" : conn.state === "error" ? "Error" : "Connecting") : "Demo"}
               {mode === "live" && conn.delayed && <span style={{ color: T.dimSolid, fontFamily: T.mono, fontSize: 9 }}>·15m</span>}
             </button>
+            {/* In the header rather than the action strip: this answers a
+                question you have while looking at something else, so it has to
+                be reachable from wherever you are. */}
+            <button onClick={() => { setLookupSymbol(""); setPanel("lookup"); }} title="Look up a symbol"
+              style={{ padding: "6px 9px", borderRadius: 7, border: "1px solid " + T.line, background: T.card, color: T.mute, fontSize: 12 }}>⌕</button>
             <button onClick={() => setPanel("about")} title="About Trinetra"
               style={{ padding: "6px 9px", borderRadius: 7, border: "1px solid " + T.line, background: T.card, color: T.mute, fontSize: 12 }}>ⓘ</button>
             <button onClick={() => setPaused(p => !p)} title={paused ? "Resume" : "Pause"} style={{ padding: "6px 9px", borderRadius: 7, border: "1px solid " + T.line, background: T.card, color: T.mute, fontSize: 11 }}>{paused ? "▶" : "❚❚"}</button>
@@ -1436,6 +1443,20 @@ export default function Trinetra() {
 
       {/* criteria panel */}
       {panel === "criteria" && <Drawer title="Criteria" onClose={() => setPanel(null)}>
+        {/* This panel shows one profile; the Morning Brief spans all of them.
+            Same stock, two panels, two answers, both correct — say which one
+            you are looking at, or the difference reads as a bug. */}
+        {liveBackend && (
+          <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginBottom: 10,
+            background: T.brassSoft, border: "1px solid " + T.brass + "3A", borderRadius: 9, padding: "8px 11px" }}>
+            Showing <span style={{ color: T.brass }}>{profiles?.[profileSel === "ALL" ? "swing" : profileSel]?.name
+              || (profileSel === "ALL" ? "Swing" : profileSel)}</span> only.
+            The Morning Brief spans every profile, so a stock can appear there and not here — use{" "}
+            <button onClick={() => { setLookupSymbol(""); setPanel("lookup"); }}
+              style={{ all: "unset", cursor: "pointer", color: T.brass, textDecoration: "underline" }}>symbol lookup</button>
+            {" "}to see all profiles for one stock at once.
+          </div>
+        )}
         <OriginalFour
           originalFour={canonicalState.originalFour}
           criteria={profiles ? (profiles[profileSel === "ALL" ? "swing" : profileSel]?.criteria || []) : criteria}
@@ -1533,6 +1554,13 @@ export default function Trinetra() {
             in it would have changed.
           </div>
         )}
+      </Drawer>}
+
+      {panel === "lookup" && <Drawer wide title="Symbol lookup" onClose={() => setPanel(null)}>
+        <PraveshBoundary>
+          <StockLookup backendUrl={backendUrl} live={liveBackend} initialSymbol={lookupSymbol}
+            onHold={markHolding} held={held} />
+        </PraveshBoundary>
       </Drawer>}
 
       {/* alerts panel */}
