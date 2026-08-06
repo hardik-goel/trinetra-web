@@ -16,6 +16,7 @@ import OriginalFour, { ORIGINAL_FOUR } from "./OriginalFour";
 import StorageBanner, { RestoredNote, StorageLine } from "./StorageBanner";
 import StockLookup from "./StockLookup";
 import SetupCard from "./SetupCard";
+import DataWarnings from "./DataWarnings";
 
 /* ================================================================
    TRINETRA — the eye opens when everything aligns
@@ -635,7 +636,10 @@ export default function Trinetra() {
           notEvaluated: pr.notEvaluated,
           withheld: !!pr.withheldForMissingData,
           requireAll: !!pr.requireAll,
-          criteriaWarnings: warnings };
+          criteriaWarnings: warnings,
+          /* Coded, so grouping and dismissal key on structure rather than
+             on sentences the backend rewords. */
+          warningsDetail: pr.warningsDetail || [] };
       }
     }
     return m;
@@ -1287,14 +1291,15 @@ export default function Trinetra() {
         {/* signals */}
         <section style={{ marginTop: 22 }}>
           {(() => {
-            const warn = [...new Set(Object.values(lockInfo).flatMap(i => i?.criteriaWarnings || []))];
-            return warn.length ? (
-              <div style={{ background: T.amber + "10", border: "1px solid " + T.amber + "44", borderRadius: 9,
-                padding: "9px 12px", marginBottom: 10, fontSize: 11.5, color: T.amber, lineHeight: 1.55 }}>
-                {warn.map(w => <div key={w}>⚠ {w}</div>)}
-              </div>
-            ) : null;
+            /* Superseded by DataWarnings: the flat list printed one sentence per
+               stock per criterion, none naming its stock, so seven near-identical
+               lines read as one and got ignored. Grouped by code + criterion,
+               with the symbols behind an expander and dismissal keyed on the
+               code. Falls back to nothing when the backend predates
+               warningsDetail — the strings alone were the unreadable part. */
+            return null;
           })()}
+          <DataWarnings lockInfo={lockInfo} />
           <ScanState scan={scan} />
           <SectionLabel>Signals — the eye is open</SectionLabel>
           {signals.length === 0 ? (
