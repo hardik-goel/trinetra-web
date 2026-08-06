@@ -356,6 +356,8 @@ export default function Trinetra() {
   const [cap, setCap] = useState(null);                // learned from the server, never assumed
   const [lookupSymbol, setLookupSymbol] = useState("");
   const [navGroup, setNavGroup] = useState(null);
+  const [briefOpen, setBriefOpen] = useState(true);
+  useEffect(() => { try { setBriefOpen(localStorage.getItem("trinetra.briefOpen") !== "0"); } catch {} }, []);
   /* State only; the fetch lives below, after liveBackend exists. */
   const [sizingCfg, setSizingCfg] = useState(null);
   const [holidayCount, setHolidayCount] = useState(null);
@@ -393,7 +395,11 @@ export default function Trinetra() {
   const [profiles, setProfiles] = useState(null);
   const [canonicalState, setCanonicalState] = useState({ matches: true, canonical: null });
   const [restoring, setRestoring] = useState(false);
-  const [profileSel, setProfileSel] = useState("swing");   // or "ALL"
+  /* "All profiles" is the honest default: the app's job on open is to say what
+     needs you anywhere, not what one horizon happens to think. Narrowing is a
+     deliberate act, so it lives in a dropdown rather than a row of chips that
+     all look equally chosen. */
+  const [profileSel, setProfileSel] = useState("ALL");
   const [held, setHeld] = useState(() => new Set());       // symbols marked as holdings
   const [events, setEvents] = useState({});                // { SYMBOL: { events: [...], stale, source } }
   const [holdBusy, setHoldBusy] = useState("");
@@ -1125,6 +1131,29 @@ export default function Trinetra() {
             onGo={id => setPanel(id)} />
         )}
 
+        {/* ── Today ──────────────────────────────────────────────────────
+            The brief was chip #7 of 11 — the screen that answers "what needs
+            me today" was the hardest one to reach, and the app opened instead
+            on 300 rows of table. It renders here, first, so the landing state
+            is an answer rather than an inventory.
+
+            Collapsible and remembered, because once it is read it is read, and
+            a permanently expanded brief just pushes the watchlist down. */}
+        {liveBackend && (
+          <div style={{ marginTop: 14 }}>
+            <button onClick={() => setBriefOpen(o => { try { localStorage.setItem("trinetra.briefOpen", (!o) ? "1" : "0"); } catch {} return !o; })}
+              style={{ all: "unset", cursor: "pointer", display: "flex", alignItems: "baseline", gap: 8, marginBottom: briefOpen ? 8 : 0 }}>
+              <span style={{ fontFamily: T.mono, fontSize: 10, letterSpacing: 1.5, color: T.brass }}>TODAY</span>
+              <span style={{ fontSize: 10.5, color: T.dimSolid }}>{briefOpen ? "hide" : "show the morning brief"}</span>
+            </button>
+            {briefOpen && (
+              <PraveshBoundary>
+                <Brief backendUrl={backendUrl} live={liveBackend} onLeave={() => {}} />
+              </PraveshBoundary>
+            )}
+          </div>
+        )}
+
         {/* ── navigation ────────────────────────────────────────────────
             Eleven equally-weighted chips made the app a control panel: daily
             work, reference, configuration and a separate product all shouting
@@ -1235,20 +1264,28 @@ export default function Trinetra() {
               intraday / 65 delayed) and the lag line on the card — greying the
               chip would hide a feature that works. */}
           {profiles && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
-              <button onClick={() => setProfileSel("ALL")} style={{ ...chip(profileSel === "ALL"), padding: "5px 10px", fontSize: 11.5 }}>
-                All profiles
-              </button>
-              {Object.entries(profiles).map(([id, p]) => (
-                <button key={id} onClick={() => setProfileSel(id)} disabled={p.enabled === false}
-                  title={p.enabled === false ? `${p.name || id} is switched off in its profile settings` : p.name}
-                  style={{ ...chip(profileSel === id), padding: "5px 10px", fontSize: 11.5, opacity: p.enabled === false ? .5 : 1 }}>
-                  {p.name || id}
-                  {(p.horizon === "intraday" || id === "intraday") && conn.delayed && (
-                    <span title="Runs on the delayed feed; confidence is capped at 55 for it" style={{ color: T.amber, fontFamily: T.mono, fontSize: 9 }}>⏱</span>
-                  )}
-                </button>
-              ))}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
+              <span style={{ fontFamily: T.mono, fontSize: 9.5, letterSpacing: 1.1, color: T.dimSolid }}>PROFILE</span>
+              <select value={profileSel} onChange={e => setProfileSel(e.target.value)}
+                style={{ ...chip(profileSel !== "ALL"), padding: "5px 9px", fontSize: 11.5, fontFamily: T.sans, appearance: "auto" }}>
+                <option value="ALL">All profiles</option>
+                {Object.entries(profiles).map(([id, p]) => (
+                  <option key={id} value={id} disabled={p.enabled === false}>
+                    {p.name || id}
+                    {p.enabled === false ? " (off)" : ""}
+                  </option>
+                ))}
+              </select>
+              {/* The delayed-feed cap was a glyph on the chip; the dropdown has
+                  nowhere to hang it, so it is stated beside the control. */}
+              {profileSel !== "ALL" && (profiles[profileSel]?.horizon === "intraday" || profileSel === "intraday") && conn.delayed && (
+                <span title="Runs on the delayed feed; confidence is capped at 55 for it"
+                  style={{ color: T.amber, fontFamily: T.mono, fontSize: 9.5 }}>⏱ delayed</span>
+              )}
+              {profileSel !== "ALL" && (
+                <button onClick={() => setProfileSel("ALL")}
+                  style={{ ...chip(false), padding: "4px 9px", fontSize: 11 }}>Show all</button>
+              )}
             </div>
           )}
           {/* Say what the cap is, where the horizon is chosen — not buried on a card. */}

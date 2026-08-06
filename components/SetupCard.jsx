@@ -39,14 +39,10 @@ export default function SetupCard({ sizing, storage, alertsArmed, holidayCount, 
     });
   }
 
-  if (storage && storage.mode !== "durable") {
-    gaps.push({
-      id: null, severity: "high",
-      what: storage.mode === "degraded" ? "The backup has stopped saving" : "Nothing is being saved",
-      cost: storage.detail || "Everything accrued is lost on the next redeploy.",
-      action: null,
-    });
-  }
+  /* Storage is deliberately absent. StorageBanner already states it directly
+     above this card, in red, with the same `detail` string — repeating it here
+     made the landing say the same sentence twice, which reads as two problems
+     and trains the eye to skip both. One warning per fault. */
 
   if (alertsArmed === false) {
     gaps.push({

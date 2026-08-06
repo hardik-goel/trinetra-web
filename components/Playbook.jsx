@@ -596,13 +596,17 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
      it answered that once, for whatever the app happened to be showing, and
      there was no way to ask it about another. Seeded from the app's profile so
      the two agree on open, then owned here. */
-  const fallback = profileId && profileId !== "ALL" ? profileId : "swing";
+  const fallback = profileId || "ALL";
   const [profile, setProfile] = useState(fallback);
   useEffect(() => { setProfile(fallback); }, [fallback]);
-  /* Holdings-only profiles have no watchlist-wide playbook to show. */
-  const choices = Object.entries(profiles || {})
-    .filter(([, p]) => p?.appliesTo !== "holdings")
-    .map(([id, p]) => ({ id, name: p?.name || id }));
+  /* Holdings-only profiles have no watchlist-wide playbook to show. "All" is
+     first and is a real option the backend understands — previously selecting
+     it silently substituted swing, so the panel answered a question nobody
+     asked and looked like it had no all-profiles view. */
+  const choices = [{ id: "ALL", name: "All profiles" },
+    ...Object.entries(profiles || {})
+      .filter(([, p]) => p?.appliesTo !== "holdings")
+      .map(([id, p]) => ({ id, name: p?.name || id }))];
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState("");
   const [open, setOpen] = useState(null);
