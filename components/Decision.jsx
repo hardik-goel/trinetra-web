@@ -1,6 +1,6 @@
 "use client";
 import React, { useState } from "react";
-import { bandLabel, ladderOf, potentialText, pctText, rupee } from "../lib/desk";
+import { bandLabel, ladderOf, potentialText, pctText, rupee, noRoomOf, withheldOf } from "../lib/desk";
 
 /* ================================================================
    THE DECISION SURFACE — potential, confidence, exit ladder.
@@ -84,9 +84,19 @@ export function ConfidenceDial({ confidence }) {
 }
 
 /* ── potential ───────────────────────────────────────────────────── */
-export function PotentialLine({ potential, horizon }) {
+export function PotentialLine({ potential, horizon, signalPrice }) {
   const p = potentialText(potential, horizon);
   const moved = potential?.movedAlreadyPct;
+  const basis = potential?.basisPrice;
+  /* Only worth saying when it is not the price the analysis ran at. On an
+     untriggered setup the percentages describe a move from the trigger, and
+     read against spot they describe a trade the entry rule forbids.
+
+     Compared against the payload's own price, not a live one: a tick of drift
+     is not a different basis, and a line that fires on drift trains the reader
+     to ignore it on the day it matters. */
+  const basisDiffers = basis != null && Number.isFinite(signalPrice)
+    && Math.abs(basis - signalPrice) / signalPrice > 0.0025;
 
   return (
     <div>
@@ -123,11 +133,88 @@ export function PotentialLine({ potential, horizon }) {
           volatility bounds {pctText(p.bounds.low)}–{pctText(p.bounds.high, false)}
         </div>
       )}
+      {/* Which price the percentages above are measured from. Stated, not
+          assumed: reading them against spot on an untriggered setup describes
+          buying now, which is the trade the entry rule exists to prevent. */}
+      {basisDiffers && (
+        <div style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid, marginTop: 4 }}>
+          measured from {rupee(basis)} — the price this trade starts at, not the {rupee(signalPrice)} it is trading at
+        </div>
+      )}
+
       {(p.basis || potential?.basis) && (
         <div style={{ fontSize: 10.5, color: T.dimSolid, lineHeight: 1.55, marginTop: 5 }}>{p.basis || potential.basis}</div>
       )}
-      {potential?.cappedBy && (
+
+      {/* `cappedBy` is "atr" or null and never a resistance level any more.
+          Naming the mechanism matters: the analog percentiles already contain
+          every wall that existed on those days, so truncating them with a
+          structural level double-counted it and collapsed all three tiers onto
+          one pivot. Only the volatility ceiling still trims the estimate. */}
+      {potential?.cappedBy === "atr" && (
+        <div style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid, marginTop: 3 }}>
+          trimmed to the volatility ceiling (1 ATR) — the analogs reached further than this stock typically moves in the window
+        </div>
+      )}
+      {potential?.cappedBy && potential.cappedBy !== "atr" && (
         <div style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid, marginTop: 3 }}>capped by {potential.cappedBy}</div>
+      )}
+
+      {/* Context, deliberately NOT a ceiling on the estimate. The engine stopped
+          truncating at this level; rendering it as a cap would put back the
+          double-count in the reader's head that the backend removed from the
+          numbers. */}
+      {potential?.resistance?.price != null && (
+        <div style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid, marginTop: 3 }}>
+          {potential.resistance.level || "resistance"} at {rupee(potential.resistance.price)} sits overhead
+          <span style={{ color: T.dim }}> · context, not a limit on the estimate</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── a target computed and rejected ──────────────────────────────── */
+/* The reason this is a component and not a line of copy: the empty target slot
+   and the "no estimate" empty state look identical, and they are opposite
+   claims. One means the engine could not measure; this one means it measured
+   and the answer was that the trade loses on arithmetic. The server's sentence
+   carries both distances, so it is rendered verbatim rather than summarised. */
+function NoTargetFinding({ exits }) {
+  const [open, setOpen] = useState(false);
+  const withheld = withheldOf({ exits });
+  const rejected = withheld
+    ? ["safe", "primary", "stretch"].map(k => [k, withheld[k]]).filter(([, v]) => v != null)
+    : [];
+
+  return (
+    <div style={{ marginTop: 12, background: T.red + "12", border: "1px solid " + T.red + "55",
+      borderLeft: "3px solid " + T.red, borderRadius: 9, padding: "10px 12px" }}>
+      <div style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1.2, color: T.red, marginBottom: 5 }}>
+        NO TARGET OFFERED
+      </div>
+      <div style={{ fontSize: 12.5, color: T.red, lineHeight: 1.6 }}>
+        {exits.riskRewardWarning
+          || "A target was computed and rejected for sitting closer than the stop — there is less to gain than to lose on any exit plan."}
+      </div>
+      <div style={{ fontSize: 11, color: T.mute, lineHeight: 1.55, marginTop: 6 }}>
+        The stop below still stands. It is the half of this trade that was never in question.
+      </div>
+      {rejected.length > 0 && (
+        <>
+          <button onClick={() => setOpen(o => !o)}
+            style={{ all: "unset", cursor: "pointer", fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid, marginTop: 6, display: "block" }}>
+            {open ? "hide the rejected levels ▴" : "what was rejected ▾"}
+          </button>
+          {open && (
+            <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.dimSolid, lineHeight: 1.7, marginTop: 4 }}>
+              {rejected.map(([k, v]) => <div key={k}>{k} {rupee(v)}</div>)}
+              <div style={{ color: T.dim, marginTop: 3 }}>
+                {withheld.why || "below 1:1 against the stop"} — shown for inspection. Not a target.
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -137,7 +224,10 @@ export function PotentialLine({ potential, horizon }) {
 export function ExitLadder({ exits, currentPrice, inline }) {
   const [openRung, setOpenRung] = useState(null);
   const rungs = ladderOf(exits);
-  if (!rungs.length) return null;
+  const noRoom = noRoomOf({ exits });
+  /* The finding leads. A stop-only ladder under a silent header reads as a
+     rendering gap; it is a conclusion, and it is the one the reader needs. */
+  if (!rungs.length) return noRoom ? <NoTargetFinding exits={exits} /> : null;
 
   const prices = rungs.map(r => r.price).filter(Number.isFinite);
   const lo = Math.min(...prices, Number.isFinite(currentPrice) ? currentPrice : Infinity);
@@ -146,9 +236,15 @@ export function ExitLadder({ exits, currentPrice, inline }) {
 
   return (
     <div style={{ marginTop: 12 }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-        <span style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1.2, color: T.dimSolid }}>EXIT LADDER</span>
-        {exits.converged && (
+      {/* Above the ladder, because the ladder is now one rung and the reader
+          must know why before reading it as a thin one. */}
+      {noRoom && <NoTargetFinding exits={exits} />}
+
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8, marginTop: noRoom ? 12 : 0 }}>
+        <span style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1.2, color: T.dimSolid }}>
+          {noRoom ? "INVALIDATION" : "EXIT LADDER"}
+        </span>
+        {!noRoom && exits.converged && (
           <span style={{ fontSize: 10.5, color: T.amber }}>
             resistance sits close overhead — one target, not a choice of three
           </span>
@@ -192,7 +288,9 @@ export function ExitLadder({ exits, currentPrice, inline }) {
         })}
       </div>
 
-      {exits.riskRewardWarning && (
+      {/* Not when noRoom — the finding above is this same sentence, and saying
+          it twice makes the second one read as a second, milder problem. */}
+      {!noRoom && exits.riskRewardWarning && (
         <div style={{ marginTop: 8, fontSize: 11.5, color: T.red, lineHeight: 1.5 }}>⚠ {exits.riskRewardWarning}</div>
       )}
     </div>
@@ -207,7 +305,9 @@ export function DecisionStrip({ signal, currentPrice, inline }) {
   return (
     <div style={{ fontFamily: T.sans }}>
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between" }}>
-        <div style={{ flex: "1 1 250px" }}><PotentialLine potential={potential} horizon={horizon} /></div>
+        <div style={{ flex: "1 1 250px" }}>
+          <PotentialLine potential={potential} horizon={horizon} signalPrice={signal.price ?? currentPrice} />
+        </div>
         <ConfidenceDial confidence={confidence} />
       </div>
 

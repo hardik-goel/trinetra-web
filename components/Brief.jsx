@@ -1,6 +1,6 @@
 "use client";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { deskApi, pctText, rupee, SEVERITY_ORDER } from "../lib/desk";
+import { deskApi, pctText, rupee, SEVERITY_ORDER, noRoomOf, withheldOf } from "../lib/desk";
 import { DecisionStrip } from "./Decision";
 
 /* ================================================================
@@ -49,16 +49,51 @@ function DataHealth({ h }) {
   );
 }
 
-/* exitLevels arrive as percentages against the signal price. A percentage is
-   not something you can put in a broker's order box, so render the price and
-   keep the percentage beside it rather than making the user do the arithmetic
-   at the moment they are deciding. */
+/* exitLevels arrive as percentages. A percentage is not something you can put
+   in a broker's order box, so render the price and keep the percentage beside
+   it rather than making the user do the arithmetic at the moment they are
+   deciding. */
 const atPct = (price, pct) => (price != null && pct != null ? price * (1 + pct / 100) : null);
+
+/* Which price those percentages are measured from.
+
+   NOT `sig.price`. The engine measures from `basisPrice` — the trigger for a
+   setup still waiting on its breakout, spot otherwise — and a fired signal can
+   still be one of those, because `requireAll` is off by default and a stock can
+   lock on fundamentals and volume with its breakout level untouched overhead.
+   Dividing by spot there produced a target underneath the entry.
+
+   A history record does not carry `basisPrice`, but it does carry the absolute
+   rupee levels the alert actually sent. So the basis is recovered from a stored
+   price and its own percentage — exact, not approximated — and only falls back
+   to spot when the record predates those fields. */
+function basisFor(sig) {
+  const direct = sig.potential?.basisPrice ?? sig.basisPrice;
+  if (direct != null) return { price: direct, exact: true };
+  const e = sig.exitLevels || {}, L = sig.levels || {};
+  for (const [abs, pct] of [[L.exit, e.primary], [L.stop, e.stop]]) {
+    if (abs != null && pct != null && 1 + pct / 100 !== 0) {
+      return { price: abs / (1 + pct / 100), exact: true };
+    }
+  }
+  return { price: sig.price ?? null, exact: false };
+}
+
+/* The percentages are stored rounded to two places, so a basis recovered from
+   one of them lands a few paise off spot even when spot IS the basis. A trigger
+   the setup has not reached is materially further away than that; anything
+   inside a quarter of a percent is the same price and must not be announced as
+   a different one. */
+const basisIsShifted = (basis, price) =>
+  basis != null && price != null && Math.abs(basis - price) / price > 0.0025;
 
 function ExitLevels({ sig }) {
   const e = sig.exitLevels;
-  if (!e) return null;
-  const px = sig.price;
+  const noRoom = noRoomOf(sig);
+  if (!e && !noRoom) return null;
+  const basis = basisFor(sig);
+  const px = basis.price;
+  const shifted = basis.exact && basisIsShifted(px, sig.price);
   const cell = (label, pct, tone) => {
     const v = atPct(px, pct);
     if (v == null) return null;
@@ -75,19 +110,51 @@ function ExitLevels({ sig }) {
      ways to win in colour and the way to lose in small grey type is selling,
      not informing. */
   const cells = [
-    cell("SAFE", e.safe, T.green),
-    cell("TARGET", e.primary, T.green),
-    cell("STRETCH", e.stretch, T.green),
-    cell("STOP", e.stop, T.red),
+    cell("SAFE", e?.safe, T.green),
+    cell("TARGET", e?.primary, T.green),
+    cell("STRETCH", e?.stretch, T.green),
+    cell("STOP", e?.stop, T.red),
   ].filter(Boolean);
-  if (!cells.length) return null;
+  if (!cells.length && !noRoom) return null;
 
   /* Same number for all three exits means the methods did not separate them —
      saying so beats printing the same price three times as if it were a ladder. */
-  const flat = e.safe != null && e.safe === e.primary && e.primary === e.stretch;
+  const flat = e?.safe != null && e.safe === e.primary && e.primary === e.stretch;
+  const withheld = withheldOf(sig);
   return (
     <div style={{ marginTop: 8 }}>
+      {/* A target was computed and rejected. Rendering only a lone STOP cell
+          would read as a partial payload; it is a conclusion. */}
+      {noRoom && (
+        <div style={{ background: T.red + "12", border: "1px solid " + T.red + "55", borderLeft: "3px solid " + T.red,
+          borderRadius: 8, padding: "8px 11px", marginBottom: 7 }}>
+          <div style={{ fontFamily: T.mono, fontSize: 8.5, letterSpacing: 1.2, color: T.red, marginBottom: 4 }}>NO TARGET OFFERED</div>
+          <div style={{ fontSize: 11.5, color: T.red, lineHeight: 1.55 }}>
+            {sig.riskRewardWarning || sig.exits?.riskRewardWarning
+              || "A target was computed and rejected for sitting closer than the stop — there is less to gain than to lose on any exit plan."}
+          </div>
+          {withheld && (
+            <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid, marginTop: 5, lineHeight: 1.6 }}>
+              rejected: {["safe", "primary", "stretch"].filter(k => withheld[k] != null)
+                .map(k => `${k} ${rupee(withheld[k], 2)}`).join(" · ")} — for inspection, not to act on
+            </div>
+          )}
+        </div>
+      )}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{cells}</div>
+      {/* Only when it is not the price on the card above it. Silent arithmetic
+          off a different price is exactly how a target ended up below its
+          own entry. */}
+      {shifted && cells.length > 0 && (
+        <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid, marginTop: 4 }}>
+          measured from {rupee(px, 2)} — where this trade starts, not the {rupee(sig.price, 2)} it fired at
+        </div>
+      )}
+      {!basis.exact && cells.length > 0 && (
+        <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid, marginTop: 4 }}>
+          measured from the price at the signal — this record predates the entry basis being stored
+        </div>
+      )}
       {flat && (
         <div style={{ fontSize: 10, color: T.dimSolid, marginTop: 4, lineHeight: 1.5 }}>
           All three exits sit at the same level — the methods did not separate them, so treat it as one target, not a ladder.
@@ -193,18 +260,53 @@ export default function Brief({ backendUrl, live, onLeave }) {
   const took = async (sig) => {
     setTookBusy(sig.symbol);
     try {
-      const px = sig.price;
       const e = sig.exitLevels || {};
-      const at = pct => (px != null && pct != null ? +(px * (1 + pct / 100)).toFixed(2) : undefined);
+      const entryPrice = sig.price;
+      /* Percentages convert against the basis, never against spot — and the
+         absolute prices the alert carried are preferred over any conversion,
+         because those are the levels the user was actually told. */
+      const basis = basisFor(sig).price;
+      const at = pct => (basis != null && pct != null ? +(basis * (1 + pct / 100)).toFixed(2) : undefined);
+      /* noRoom means the target was computed and rejected. Recording the
+         withheld price here would put the number back into the one slot the
+         backend removed it from, and the exit rules would then run against a
+         level the engine refused to publish. No target is the correct record. */
+      let target = noRoomOf(sig) ? undefined : (sig.levels?.exit ?? at(e.primary));
+      let stopLoss = sig.levels?.stop ?? at(e.stop);
+
+      /* The same guard the backend applies before a level leaves the process,
+         applied again at the moment one is written into a position.
+
+         The plan was built for an entry at `basis`. When the user takes it
+         somewhere else — BEL's alert said enter at ₹431.50 and it fired at
+         ₹399.10 — the plan's stop can land ABOVE the price actually paid, and
+         a holding whose stop is above its entry stops out on the way up.
+         Re-deriving the levels from the new entry would be worse: it invents
+         numbers nobody published and calls them the plan.
+         So neither is recorded, and the reason is said out loud. */
+      /* Buys only. On a `sell_holdings` card "sell" means close a position you
+         already have, and its percentages point upward because you are selling
+         into strength — read as a short entry they look inverted when nothing
+         is wrong. This button records a new long, so that is the only shape
+         being checked. */
+      const isBuy = (sig.direction || "buy") !== "sell";
+      const bad = isBuy && entryPrice != null
+        && ((target != null && target <= entryPrice) || (stopLoss != null && stopLoss >= entryPrice));
+      if (bad) { target = undefined; stopLoss = undefined; }
+
       await api.hold2({
         symbol: sig.symbol,
         profileId: sig.profileId || undefined,
-        entryPrice: px,
-        stopLoss: at(e.stop),
-        target: at(e.primary),
+        entryPrice,
+        stopLoss,
+        target,
         purchaseDate: new Date().toISOString().slice(0, 10),
       });
       await load();
+      // after load(), which clears the message slot on a successful refresh
+      if (bad) {
+        setState(s => ({ ...s, err: `${sig.symbol} was recorded without a stop or target. Its levels were built for an entry at ${rupee(basis, 2)}; at the ${rupee(entryPrice, 2)} you are entering at, they land on the wrong side of your entry. Re-deriving them here would invent numbers the engine never published, so they are left blank — set them yourself in Positions.` }));
+      }
     } catch (err) {
       setState(s => ({ ...s, err: `Could not record ${sig.symbol} — ${err.message}` }));
     } finally { setTookBusy(null); }

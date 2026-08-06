@@ -1,6 +1,6 @@
 "use client";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { deskApi, bandLabel, pctText, rupee } from "../lib/desk";
+import { deskApi, bandLabel, pctText, rupee, noRoomOf, withheldOf } from "../lib/desk";
 import DataTable from "./DataTable";
 import { RiskNote, ShortabilityChip, ShortabilityBlock, LotNote, isShort, DEFAULT_RISK_NOTE } from "./Shortability";
 
@@ -203,6 +203,17 @@ const rrOf = r => r?.exits?.riskReward ?? r?.riskReward;
 /* A sell captures a fall. Printing its pct (-5.5%) reads as a loss, and calling
    it upside is simply wrong — so magnitude plus a direction arrow, always from
    the payload, never inferred from the sign. */
+/* A target that was computed and rejected. Rendered wherever a target would
+   have gone, at the weight of the finding it is — the row is not missing a
+   number, it is carrying a conclusion. */
+const NoTargetCell = ({ r, small }) => (
+  <span title={r.exits?.riskRewardWarning || r.riskRewardWarning
+    || "A target was computed and rejected for sitting closer than the stop."}
+    style={{ color: T.red, fontSize: small ? 10 : 12, fontFamily: T.mono }}>
+    no target offered
+  </span>
+);
+
 function moveText(level, direction) {
   if (!level) return "—";
   const down = level.downward ?? (direction === "sell");
@@ -334,6 +345,12 @@ function AddBrokerCall({ symbol, onAdd }) {
 
 function Detail({ pb, onHold, held, busy, onAddCall, shortability }) {
   const p = pb.potential || {};
+  const noRoom = noRoomOf(pb);
+  const withheld = withheldOf(pb);
+  /* Top level on the detail payload, under `potential` on a list row — read
+     both, because a missing basis silently re-measures every percentage
+     against spot. */
+  const basisPrice = pb.basisPrice ?? p.basisPrice ?? null;
   const big = (label, value, sub, colour) => (
     <div style={{ flex: "1 1 150px", background: T.card, border: "1px solid " + T.line, borderRadius: 10, padding: "11px 13px" }}>
       <div style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1, color: T.dimSolid }}>{label}</div>
@@ -364,10 +381,10 @@ function Detail({ pb, onHold, held, busy, onAddCall, shortability }) {
           would actually pay, which is not today's price on an untriggered
           setup. Measuring from spot is what made these look attractive when
           they were not, so the basis is stated rather than assumed. */}
-      {pb.basisPrice != null && (
+      {basisPrice != null && (
         <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.dimSolid, lineHeight: 1.6, marginBottom: 8 }}>
-          measured from {rupee(pb.basisPrice, 0)}{pb.basis ? ` · ${pb.basis}` : ""}
-          {pb.potential?.fromSpotToPrimaryPct != null && (
+          measured from {rupee(basisPrice, 0)}{pb.basis || p.basis ? ` · ${pb.basis || p.basis}` : ""}
+          {!noRoom && pb.potential?.fromSpotToPrimaryPct != null && (
             <> · {pctText(pb.potential.fromSpotToPrimaryPct)} away from today&apos;s price, which is distance, not the trade&apos;s potential</>
           )}
         </div>
@@ -397,10 +414,30 @@ function Detail({ pb, onHold, held, busy, onAddCall, shortability }) {
 
       {/* Beside the numbers, not under them: a signal can lock cleanly and
           still be a bad bet, and on a short the losing side is unbounded. */}
-      {pb.riskRewardWarning && (
+      {/* On noRoom this same sentence IS the finding, so it gets the heading
+          that says which of the two empty-target states this is. The other
+          state — no estimate at all — must never render this copy. */}
+      {(pb.riskRewardWarning || pb.exits?.riskRewardWarning) && (
         <div style={{ background: T.red + "12", border: "1px solid " + T.red + "55", borderLeft: "3px solid " + T.red,
-          borderRadius: 9, padding: "10px 12px", marginBottom: 10, fontSize: 12.5, color: T.red, lineHeight: 1.6 }}>
-          {pb.riskRewardWarning}
+          borderRadius: 9, padding: "10px 12px", marginBottom: 10 }}>
+          {noRoom && (
+            <div style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1.2, color: T.red, marginBottom: 5 }}>NO TARGET OFFERED</div>
+          )}
+          <div style={{ fontSize: 12.5, color: T.red, lineHeight: 1.6 }}>
+            {pb.riskRewardWarning || pb.exits?.riskRewardWarning}
+          </div>
+          {noRoom && (
+            <div style={{ fontSize: 11, color: T.mute, lineHeight: 1.55, marginTop: 6 }}>
+              A target was computed and rejected, not missing. The invalidation level below still stands.
+            </div>
+          )}
+          {noRoom && withheld && (
+            <div style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid, marginTop: 5, lineHeight: 1.6 }}>
+              rejected: {["safe", "primary", "stretch"].filter(k => withheld[k] != null)
+                .map(k => `${k} ${rupee(withheld[k], 0)}`).join(" · ")}
+              {" — "}{withheld.why || "below 1:1 against the stop"}. Shown for inspection, not to act on.
+            </div>
+          )}
         </div>
       )}
       {isShort(pb) && <ShortabilityBlock s={shortability || pb.shortability} clamped={pb.horizonClamped} />}
@@ -409,11 +446,19 @@ function Detail({ pb, onHold, held, busy, onAddCall, shortability }) {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {big(pb.actionLabel || pb.exits?.actionLabel || "Entry zone", zoneText(pb.entry?.zone), pb.entry?.kind)}
         {big("Current", rupee(pb.price, 0), pb.entry?.movedAlreadyPct != null ? `${pctText(pb.entry.movedAlreadyPct)} vs trigger` : null)}
-        {big(pb.targetLabel || pb.exits?.targetLabel || "Primary exit", zoneText(ex(pb, "primary")?.zone), ex(pb, "primary")?.anchor)}
-        {big(pb.direction === "sell" ? "Capture" : "Left to target",
-          moveText(ex(pb, "primary") || { movePct: p.toPrimaryPct }, pb.direction),
-          p.exhausted ? "typical move already spent" : (pb.direction === "sell" ? "the fall you would capture" : null),
-          p.exhausted ? T.amber : moveColour(ex(pb, "primary"), pb.direction))}
+        {/* Both of these fall back to `potential.toPrimaryPct` when the level
+            object is absent — and on noRoom that percentage still describes the
+            REJECTED target. Substituting it here is the same promotion the
+            backend removed from the price. */}
+        {noRoom
+          ? big(pb.targetLabel || pb.exits?.targetLabel || "Primary exit", "none", "computed and rejected", T.red)
+          : big(pb.targetLabel || pb.exits?.targetLabel || "Primary exit", zoneText(ex(pb, "primary")?.zone), ex(pb, "primary")?.anchor)}
+        {noRoom
+          ? big(pb.direction === "sell" ? "Capture" : "Left to target", "—", "less to gain than to lose on any exit plan", T.red)
+          : big(pb.direction === "sell" ? "Capture" : "Left to target",
+              moveText(ex(pb, "primary") || { movePct: p.toPrimaryPct }, pb.direction),
+              p.exhausted ? "typical move already spent" : (pb.direction === "sell" ? "the fall you would capture" : null),
+              p.exhausted ? T.amber : moveColour(ex(pb, "primary"), pb.direction))}
       </div>
 
       <RangeBar pb={pb} />
@@ -421,9 +466,17 @@ function Detail({ pb, onHold, held, busy, onAddCall, shortability }) {
         <span style={{ color: T.red }}>▍stop {zoneText(pb.exits?.stop?.zone)}</span>
         <span style={{ color: T.brass }}>▍entry {zoneText(pb.entry?.zone)}</span>
         <span style={{ color: T.ink }}>▍now {rupee(pb.price, 0)}</span>
-        <span style={{ color: T.green }}>▍safe {zoneText(pb.exits?.safe?.zone)}</span>
-        <span style={{ color: T.brass }}>▍primary {zoneText(pb.exits?.primary?.zone)}</span>
-        <span style={{ color: T.blue }}>▍stretch {zoneText(pb.exits?.stretch?.zone)}</span>
+        {/* Three dashes here would read as three levels the engine failed to
+            produce. It produced them and threw them out. */}
+        {noRoom ? (
+          <span style={{ color: T.red }}>no target tier — all three sat closer than the stop</span>
+        ) : (
+          <>
+            <span style={{ color: T.green }}>▍safe {zoneText(pb.exits?.safe?.zone)}</span>
+            <span style={{ color: T.brass }}>▍primary {zoneText(pb.exits?.primary?.zone)}</span>
+            <span style={{ color: T.blue }}>▍stretch {zoneText(pb.exits?.stretch?.zone)}</span>
+          </>
+        )}
       </div>
 
       <Label>Entry · confidence</Label>
@@ -440,6 +493,11 @@ function Detail({ pb, onHold, held, busy, onAddCall, shortability }) {
 
       <Label>Exits · confidence</Label>
       <Confidence c={exitConf(pb)} />
+      {noRoom && (
+        <div style={{ fontSize: 11.5, color: T.red, lineHeight: 1.6, marginTop: 8 }}>
+          No exit tier is listed because none of them cleared the stop. What follows is the invalidation level only.
+        </div>
+      )}
       <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8 }}>
         {["safe", "primary", "stretch"].map(k => {
           const e = ex(pb, k); if (!e) return null;
@@ -476,7 +534,9 @@ function Detail({ pb, onHold, held, busy, onAddCall, shortability }) {
           </div>
         )}
       </div>
-      {(pb.exits?.riskRewardWarning || pb.riskRewardWarning) && (
+      {/* Already stated above the numbers when noRoom, with its heading. A
+          second copy down here reads as a second, separate problem. */}
+      {!noRoom && (pb.exits?.riskRewardWarning || pb.riskRewardWarning) && (
         <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>⚠ {pb.exits?.riskRewardWarning || pb.riskRewardWarning}</div>
       )}
 
@@ -659,7 +719,11 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
   }
 
   const list = (rows || []).filter(r => !stateFilter || stateOf(r) === stateFilter);
-  const val = r => sort.key === "potential" ? r.potential?.toPrimaryPct
+  /* null on noRoom, not 0. The sorter puts missing values last in both
+     directions precisely so absence never reads as a low value — and here the
+     percentage that survives in the payload belongs to a target that was
+     thrown away, so sorting on it ranks rows by a number nobody may act on. */
+  const val = r => sort.key === "potential" ? (noRoomOf(r) ? null : r.potential?.toPrimaryPct)
     : sort.key === "entryConf" ? r.entry?.confidence?.score
     : sort.key === "exitConf" ? exitConf(r)?.score
     : sort.key === "convergence" ? (r.convergence ?? r.entry?.convergence)
@@ -755,9 +819,15 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
                     {r.entry?.chasing && (
                       <div style={{ fontFamily: T.mono, fontSize: 9, color: T.red }} title={r.entry.warning || "chasing"}>⚠ chasing</div>
                     )}
-                    {rr != null && rr < 1 && (
-                      <div style={{ fontFamily: T.mono, fontSize: 9, color: T.red }} title="Risk exceeds reward to the primary target">⚠ R:R {(+rr).toFixed(1)}</div>
-                    )}
+                    {/* On noRoom there is no primary target to quote a ratio
+                        against — the ratio in the payload belongs to the one
+                        that was rejected. Say the conclusion instead. */}
+                    {noRoomOf(r)
+                      ? <div style={{ fontFamily: T.mono, fontSize: 9, color: T.red }}
+                          title={r.exits?.riskRewardWarning || r.riskRewardWarning || "A target was computed and rejected."}>⚠ no target</div>
+                      : rr != null && rr < 1 && (
+                        <div style={{ fontFamily: T.mono, fontSize: 9, color: T.red }} title="Risk exceeds reward to the primary target">⚠ R:R {(+rr).toFixed(1)}</div>
+                      )}
                   </span>
                 );
               } },
@@ -802,15 +872,20 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
             { key: "price", label: "Current", type: "number", render: r => rupee(r.price, 0) },
             { key: "target", label: targetHeader, type: "number",
               value: r => ex(r, "primary")?.zone?.low,
-              render: r => <span>
+              render: r => noRoomOf(r) ? <NoTargetCell r={r} /> : <span>
                 {mixedTarget && <span style={{ fontFamily: T.mono, fontSize: 8.5, color: T.dimSolid, display: "block" }}>
                   {r.targetLabel || (r.direction === "sell" ? "Buy back" : "Target")}</span>}
                 {zoneText(ex(r, "primary")?.zone)}
               </span> },
             { key: "left", label: "Left", type: "number",
               // Magnitude: a sell capturing 5% ranks with a buy gaining 5%.
-              value: r => ex(r, "primary")?.movePct ?? (r.potential?.toPrimaryPct != null ? Math.abs(r.potential.toPrimaryPct) : null),
-              render: r => incoherence(r)
+              // null on noRoom — the surviving percentage is the rejected
+              // target's, and ranking rows by it re-promotes the number.
+              value: r => noRoomOf(r) ? null
+                : ex(r, "primary")?.movePct ?? (r.potential?.toPrimaryPct != null ? Math.abs(r.potential.toPrimaryPct) : null),
+              render: r => noRoomOf(r)
+                ? <NoTargetCell r={r} small />
+                : incoherence(r)
                 ? (isShort(r)
                     ? <span title="The cover level sits above where the short is entered — this is not a takeable plan" style={{ color: T.red, fontSize: 10 }}>cover above entry</span>
                     : <span title="Every target sits below the entry trigger — this is not a takeable plan" style={{ color: T.red, fontSize: 10 }}>targets below entry</span>)
@@ -834,9 +909,12 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
                     it — so a sub-1:1 ratio still gets said here rather than
                     waiting for the string to arrive. The score must never be
                     readable on its own. */}
-                {(r.riskRewardWarning || (rrOf(r)?.toPrimary != null && rrOf(r).toPrimary < 1)) && (
+                {/* The locally-written fallback names "the primary target",
+                    which does not exist on a noRoom row — so it is only ever
+                    used when a target is actually being offered. */}
+                {(r.riskRewardWarning || r.exits?.riskRewardWarning || (!noRoomOf(r) && rrOf(r)?.toPrimary != null && rrOf(r).toPrimary < 1)) && (
                   <div style={{ fontSize: 9.5, color: T.red, lineHeight: 1.45, marginTop: 3, maxWidth: 190 }}>
-                    ⚠ {r.riskRewardWarning
+                    ⚠ {r.riskRewardWarning || r.exits?.riskRewardWarning
                       || `Risk-reward to the primary target is ${(+rrOf(r).toPrimary).toFixed(2)}:1 — below 1:1, so the maths is against this regardless of how the setup looks.`}
                   </div>
                 )}

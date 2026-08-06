@@ -329,10 +329,20 @@ function SignalsView({ signals, trades, onLog, assumptions, stats }) {
             render: r => {
               const L = r.levels;
               if (!L) return <span style={{ color: T.dim }}>—</span>;
+              /* An entry and a stop with no exit is the shape of a signal whose
+                 target was computed and rejected — the alert carried a stop and
+                 deliberately no target. A bare dash in the out slot reads as a
+                 missing field, so the two are told apart on the row.
+                 The record itself does not persist `noRoom`; this reads the
+                 shape it leaves behind, which is why it says "no target sent"
+                 rather than quoting a ratio it cannot see. */
+              const noTarget = L.exit == null && L.entry != null && L.stop != null;
               return (
                 <span style={{ fontFamily: T.mono, fontSize: 10, lineHeight: 1.5 }} title={L.source ? `levels from ${L.source}` : ""}>
                   <div>in {inr(L.entry, 2)}</div>
-                  <div style={{ color: T.green }}>out {inr(L.exit, 2)}</div>
+                  {noTarget
+                    ? <div style={{ color: T.red }} title="The alert carried a stop and no target.">no target sent</div>
+                    : <div style={{ color: T.green }}>out {inr(L.exit, 2)}</div>}
                   <div style={{ color: T.red }}>stop {inr(L.stop, 2)}</div>
                   {L.source && <div style={{ color: T.dim, fontSize: 8.5 }}>{L.source}</div>}
                 </span>
