@@ -565,16 +565,15 @@ export default function Trinetra() {
          tell" — which is the entire reason requireAll exists. */
       if (pr?.lockQuality || pr?.withheldForMissingData) {
         const warnings = pr.warnings || pr.criteriaWarnings || [];
-        /* /signals/preview returns withheldForMissingData explicitly; /snapshot
-           rows do not carry it, but they do carry the server's "Withheld: …"
-           sentence. Read the flag when it is there and fall back to the string
-           the server itself wrote, rather than leaving the state invisible on
-           the only surface that lists every stock. */
+        /* A boolean, not a regex over the server's prose. The fallback that
+           used to live here matched /^withheld\b/ against a warning string,
+           which worked until the wording changed and then failed silently —
+           the badge would simply stop appearing. Branch on fields; read
+           sentences. */
         m[s.symbol] = { lockQuality: pr.lockQuality, lockedOn: pr.lockedOn,
           notEvaluated: pr.notEvaluated,
-          withheld: pr.withheldForMissingData != null
-            ? !!pr.withheldForMissingData
-            : warnings.some(w => /^withheld\b/i.test(w)),
+          withheld: !!pr.withheldForMissingData,
+          requireAll: !!pr.requireAll,
           criteriaWarnings: warnings };
       }
     }
