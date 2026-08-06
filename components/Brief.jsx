@@ -49,7 +49,55 @@ function DataHealth({ h }) {
   );
 }
 
-function SignalCard({ sig, onHold, held, busy }) {
+/* exitLevels arrive as percentages against the signal price. A percentage is
+   not something you can put in a broker's order box, so render the price and
+   keep the percentage beside it rather than making the user do the arithmetic
+   at the moment they are deciding. */
+const atPct = (price, pct) => (price != null && pct != null ? price * (1 + pct / 100) : null);
+
+function ExitLevels({ sig }) {
+  const e = sig.exitLevels;
+  if (!e) return null;
+  const px = sig.price;
+  const cell = (label, pct, tone) => {
+    const v = atPct(px, pct);
+    if (v == null) return null;
+    return (
+      <div key={label} style={{ background: T.raised || "#20221799", border: "1px solid " + T.line,
+        borderRadius: 7, padding: "6px 9px", minWidth: 88 }}>
+        <div style={{ fontFamily: T.mono, fontSize: 8, letterSpacing: 1, color: T.dimSolid }}>{label}</div>
+        <div style={{ fontFamily: T.mono, fontSize: 12, color: tone, marginTop: 2 }}>{rupee(v, 2)}</div>
+        <div style={{ fontFamily: T.mono, fontSize: 8.5, color: T.dimSolid }}>{pctText(pct)}</div>
+      </div>
+    );
+  };
+  /* The stop renders at the same size as the targets. A card that shows three
+     ways to win in colour and the way to lose in small grey type is selling,
+     not informing. */
+  const cells = [
+    cell("SAFE", e.safe, T.green),
+    cell("TARGET", e.primary, T.green),
+    cell("STRETCH", e.stretch, T.green),
+    cell("STOP", e.stop, T.red),
+  ].filter(Boolean);
+  if (!cells.length) return null;
+
+  /* Same number for all three exits means the methods did not separate them —
+     saying so beats printing the same price three times as if it were a ladder. */
+  const flat = e.safe != null && e.safe === e.primary && e.primary === e.stretch;
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{cells}</div>
+      {flat && (
+        <div style={{ fontSize: 10, color: T.dimSolid, marginTop: 4, lineHeight: 1.5 }}>
+          All three exits sit at the same level — the methods did not separate them, so treat it as one target, not a ladder.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SignalCard({ sig, onHold, held, busy, onTook, tookBusy }) {
   const [open, setOpen] = useState(false);
   return (
     <div style={{ background: T.card, border: "1px solid " + T.line, borderRadius: 10, padding: "11px 13px", marginBottom: 7 }}>
@@ -79,13 +127,27 @@ function SignalCard({ sig, onHold, held, busy }) {
             </div>
           )}
 
-      <div style={{ marginTop: 9 }}>
+      <ExitLevels sig={sig} />
+
+      <div style={{ marginTop: 9, display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap" }}>
         {held
-          ? <span style={{ fontFamily: T.mono, fontSize: 10, color: T.green }}>✓ marked as held</span>
-          : <button onClick={() => onHold(sig.symbol)} disabled={busy}
-              style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid " + T.brass + "55", background: T.brassSoft, color: T.brass, fontSize: 11.5, cursor: "pointer" }}>
-              I&apos;m holding this
-            </button>}
+          ? <span style={{ fontFamily: T.mono, fontSize: 10, color: T.green }}>✓ in your book</span>
+          : <>
+              {/* One tap records the real position with the levels this signal
+                  is showing — the stop and target the exit rules then run
+                  against. Retyping them by hand is how they end up different
+                  from the plan that justified the trade. */}
+              <button onClick={() => onTook(sig)} disabled={tookBusy}
+                style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid " + T.brass,
+                  background: T.brass, color: "#141206", fontSize: 11.5, fontWeight: 600,
+                  cursor: tookBusy ? "default" : "pointer", opacity: tookBusy ? .5 : 1 }}>
+                {tookBusy ? "Recording…" : "I took this"}
+              </button>
+              <button onClick={() => onHold(sig.symbol)} disabled={busy}
+                style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid " + T.line, background: "transparent", color: T.mute, fontSize: 11, cursor: "pointer" }}>
+                just watch it
+              </button>
+            </>}
       </div>
     </div>
   );
@@ -116,6 +178,36 @@ export default function Brief({ backendUrl, live, onLeave }) {
     setState(s => ({ ...s, busy: true }));
     try { await api.hold(symbol); await load(); }
     catch (e) { setState({ busy: false, err: e.message }); }
+  };
+
+  /* "I took this" records a real position, not a paper trade — the levels the
+     signal is showing become the holding's stop and target, so the exit rules
+     run against the plan that justified the trade rather than one retyped
+     later from memory. The profile is carried too: an intraday entry and a
+     long-term entry are not the same position and must not be scored alike.
+
+     purchaseDate is set to today because that is the claim being made. The
+     backend defaults it to null and warns that markedAt is wrong in the
+     expensive direction for STCG; saying it explicitly avoids that. */
+  const [tookBusy, setTookBusy] = useState(null);
+  const took = async (sig) => {
+    setTookBusy(sig.symbol);
+    try {
+      const px = sig.price;
+      const e = sig.exitLevels || {};
+      const at = pct => (px != null && pct != null ? +(px * (1 + pct / 100)).toFixed(2) : undefined);
+      await api.hold2({
+        symbol: sig.symbol,
+        profileId: sig.profileId || undefined,
+        entryPrice: px,
+        stopLoss: at(e.stop),
+        target: at(e.primary),
+        purchaseDate: new Date().toISOString().slice(0, 10),
+      });
+      await load();
+    } catch (err) {
+      setState(s => ({ ...s, err: `Could not record ${sig.symbol} — ${err.message}` }));
+    } finally { setTookBusy(null); }
   };
 
   if (!live) {
@@ -198,7 +290,8 @@ export default function Brief({ backendUrl, live, onLeave }) {
                   {String(pid).toUpperCase()} · {byProfile[pid].length}
                 </div>
                 {byProfile[pid].map(sig => (
-                  <SignalCard key={sig.id || sig.symbol} sig={sig} busy={state.busy} held={held.has(sig.symbol)} onHold={hold} />
+                  <SignalCard key={sig.id || sig.symbol} sig={sig} busy={state.busy} held={held.has(sig.symbol)}
+                    onHold={hold} onTook={took} tookBusy={tookBusy === sig.symbol} />
                 ))}
               </div>
             ))}
