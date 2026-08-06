@@ -318,6 +318,26 @@ function SignalsView({ signals, trades, onLog, assumptions, stats }) {
               {(r.direction || "buy").toUpperCase()}</span> },
           { key: "firedAt", label: "Fired", type: "date", value: r => r.firedAt, render: r => shortDate(r.firedAt) },
           { key: "price", label: "Price", type: "number", render: r => inr(r.price, 2) },
+          /* The rupee levels the alert actually sent. Without them a row can be
+             compared to the outcome but not to the message the user acted on,
+             so a level that was wrong at the time is indistinguishable from one
+             recomputed since. Absent on rows that predate the field — shown as
+             a dash rather than back-filled from today's numbers, which would be
+             the exact substitution this column exists to make visible. */
+          { key: "levels", label: "Alert levels", type: "number", align: "right",
+            value: r => r.levels?.entry ?? null,
+            render: r => {
+              const L = r.levels;
+              if (!L) return <span style={{ color: T.dim }}>—</span>;
+              return (
+                <span style={{ fontFamily: T.mono, fontSize: 10, lineHeight: 1.5 }} title={L.source ? `levels from ${L.source}` : ""}>
+                  <div>in {inr(L.entry, 2)}</div>
+                  <div style={{ color: T.green }}>out {inr(L.exit, 2)}</div>
+                  <div style={{ color: T.red }}>stop {inr(L.stop, 2)}</div>
+                  {L.source && <div style={{ color: T.dim, fontSize: 8.5 }}>{L.source}</div>}
+                </span>
+              );
+            } },
           /* "O+R+V+W 4/4" reads like the founding four criteria and is actually
              the Intraday profile's four — it caused exactly that confusion.
              The initials are a grouping key, not a label, so name the profile
