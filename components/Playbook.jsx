@@ -613,12 +613,17 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
   const [detail, setDetail] = useState(null);
   const [sort, setSort] = useState({ key: "potential", dir: "desc" });
   const [stateFilter, setStateFilter] = useState("");
+  const [mode, setMode] = useState("");
 
 
   const load = useCallback(async () => {
     if (!api) return;
     setErr("");
-    try { const j = await api.playbookAll(profile); setRows(j?.rows || j?.playbooks || []); }
+    try {
+      const j = await api.playbookAll(profile);
+      setRows(j?.rows || j?.playbooks || []);
+      setMode(j?.mode || "");
+    }
     catch (e) { setRows(null); setErr(e.message || "unavailable"); }
   }, [api, profile]);
   useEffect(() => { load(); }, [load]);
@@ -706,6 +711,16 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
         <button onClick={load} style={{ ...btn(), marginLeft: "auto" }}>↻</button>
       </div>
 
+      {/* The server explains what a combined view actually contains. Written to
+          be rendered as-is: paraphrasing it would put a second description of
+          the same behaviour in a place that cannot see the code. */}
+      {mode && profile === "ALL" && (
+        <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginBottom: 10,
+          background: T.brassSoft, border: "1px solid " + T.brass + "3A", borderRadius: 9, padding: "8px 11px" }}>
+          {mode}
+        </div>
+      )}
+
       {/* Non-negotiable: on screen for as long as a short is, never behind a
           tap. A long can go to zero; a short has no ceiling. */}
       {anyShort && <RiskNote text={shortRows[0]?.riskNote} count={shortRows.length} />}
@@ -755,6 +770,22 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
                every row it described. When the visible rows agree, the header
                states their shared label; when they are mixed, it stays neutral
                and each cell carries its own. */
+            /* Which profile built this row, and whether that was a real lock or
+               the swing fallback. Without the distinction, a fallback row reads
+               as "Swing likes this" when the truth is "nothing locked it". */
+            ...(profile === "ALL" ? [{ key: "builtUnder", label: "Profile", type: "cat",
+              value: r => r.profileId || "—",
+              render: r => (
+                <span>
+                  <span style={{ fontFamily: T.mono, fontSize: 10, color: T.ink }}>{r.profileId || "—"}</span>
+                  {r.profileChosenBy === "default" && (
+                    <div style={{ fontFamily: T.mono, fontSize: 8.5, color: T.dimSolid }}
+                      title="Not locked under any profile — levels are shown under the swing default so the row is not blank.">
+                      fallback
+                    </div>
+                  )}
+                </span>
+              ) }] : []),
             /* Only meaningful for shorts, so it stays out of the way on a
                long-only page rather than filling with dashes. */
             ...(anyShort ? [{ key: "shortability", label: "Can hold?", type: "cat",

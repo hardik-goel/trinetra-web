@@ -328,10 +328,26 @@ function SignalsView({ signals, trades, onLog, assumptions, stats }) {
             render: r => {
               const names = r.lockedOn?.length ? r.lockedOn
                 : (r.criteria || []).filter(c => c.pass).map(c => c.name);
+              /* Stored at fire time, not recomputed: whether this entry rested
+                 on every criterion or only the ones that had data. A hit rate
+                 that blends the two describes a strategy nobody ran, so the
+                 rows have to be distinguishable in the record itself. */
+              const partial = r.lockQuality === "partial";
               return (
                 <span title={r.combo}>
                   <span style={{ color: T.brass }}>{r.profileName || r.profileId || "—"}</span>
                   <span style={{ color: T.dimSolid }}> {r.count}/{r.total}</span>
+                  {partial && (
+                    <span title={r.notEvaluated?.length
+                      ? "Locked without evaluating: " + r.notEvaluated.join(", ")
+                      : "One or more criteria had no data when this fired."}
+                      style={{ fontFamily: T.mono, fontSize: 8.5, color: T.amber, marginLeft: 5,
+                        border: "1px solid " + T.amber + "55", borderRadius: 3, padding: "0 4px" }}>partial</span>
+                  )}
+                  {r.requireAll && (
+                    <span title="This profile required every criterion to be evaluated when this fired."
+                      style={{ fontFamily: T.mono, fontSize: 8.5, color: T.green, marginLeft: 4 }}>strict</span>
+                  )}
                   {names.length > 0 && (
                     <div style={{ fontSize: 9.5, color: T.mute, lineHeight: 1.45, marginTop: 2, maxWidth: 260 }}>
                       {names.join(", ")}

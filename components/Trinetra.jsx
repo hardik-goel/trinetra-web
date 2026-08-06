@@ -558,7 +558,16 @@ export default function Trinetra() {
     const m = {};
     for (const s of stocks) {
       const pr = s.profileResults?.[key];
-      if (pr?.lockQuality) m[s.symbol] = { lockQuality: pr.lockQuality, lockedOn: pr.lockedOn, notEvaluated: pr.notEvaluated, criteriaWarnings: pr.warnings || pr.criteriaWarnings };
+      /* withheldForMissingData is a third state, not a shade of "no". It means
+         every criterion that could be judged passed, and the profile refused to
+         lock only because one could not be judged at all. Folding that into
+         silence loses the difference between "this failed" and "we could not
+         tell" — which is the entire reason requireAll exists. */
+      if (pr?.lockQuality || pr?.withheldForMissingData) {
+        m[s.symbol] = { lockQuality: pr.lockQuality, lockedOn: pr.lockedOn,
+          notEvaluated: pr.notEvaluated, withheld: !!pr.withheldForMissingData,
+          criteriaWarnings: pr.warnings || pr.criteriaWarnings };
+      }
     }
     return m;
   }, [stocks, profileSel]);
@@ -1233,6 +1242,12 @@ export default function Trinetra() {
                     <div style={{ fontFamily: T.mono, fontSize: 10.5, color: lockInfo[g.symbol]?.lockQuality === "partial" ? T.amber : T.brass, marginTop: 3 }}>
                       ₹{fmtIN(g.price)} · vol {g.ev.volX?.toFixed(1)}× · {g.ev.count}/{g.ev.total} locked
                       {lockInfo[g.symbol]?.lockQuality === "partial" && " · PARTIAL"}
+                      {lockInfo[g.symbol]?.withheld && (
+                        <span title={"Everything that could be judged passed. Held back because " +
+                          ((lockInfo[g.symbol].notEvaluated || []).join(", ") || "a criterion") +
+                          " had no data — this profile requires all criteria."}
+                          style={{ color: T.amber }}> · WITHHELD, NOT FAILED</span>
+                      )}
                     </div>
                     {lockInfo[g.symbol]?.notEvaluated?.length > 0 && (
                       <div style={{ fontSize: 10.5, color: T.amber, marginTop: 3, lineHeight: 1.5 }}>
