@@ -15,6 +15,7 @@ import DataTable from "./DataTable";
 import OriginalFour, { ORIGINAL_FOUR } from "./OriginalFour";
 import StorageBanner, { RestoredNote, StorageLine } from "./StorageBanner";
 import StockLookup from "./StockLookup";
+import SetupCard from "./SetupCard";
 
 /* ================================================================
    TRINETRA — the eye opens when everything aligns
@@ -188,6 +189,41 @@ const capFromError = (msg) => {
   const m = /max\s+(\d+)/i.exec(String(msg || ""));
   return m ? +m[1] : null;
 };
+
+/* ── navigation groups ───────────────────────────────────────────────
+   Grouped by when you reach for a thing, not by which subsystem built it:
+   what needs you today, what you are researching, what you own, and what
+   you configure once. Oracle is absent on purpose — it is parked, and a
+   parked feature holding prime navigation is pure cost. It is still
+   reachable at ?panel=oracle for whoever is finishing it. */
+const NAV = [
+  { id: "today", label: "Today", glyph: "☀",
+    badge: c => (c.fired || null),
+    items: [
+      { id: "brief", label: "Morning brief" },
+      { id: "playbook", label: "Playbook" },
+      { id: "alerts", label: "Alerts" },
+    ] },
+  { id: "watch", label: "Watch", glyph: "◈",
+    items: [
+      { id: "fundamentals", label: "Fundamentals" },
+      { id: "universe", label: "Universe", badge: c => c.universe },
+    ] },
+  { id: "book", label: "Book", glyph: "◱",
+    badge: c => (c.held || null),
+    items: [
+      { id: "positions", label: "Positions", badge: c => (c.held || null) },
+      { id: "track", label: "Track record" },
+    ] },
+  { id: "setup", label: "Setup", glyph: "⚙",
+    items: [
+      { id: "criteria", label: "Criteria", badge: c => c.criteria },
+      { id: "feed", label: "Data feed" },
+      { id: "help", label: "Help" },
+      { id: "about", label: "About" },
+    ] },
+];
+
 const UNI_KEY = "trinetra.universe";
 const SYM_RE = /^[A-Z0-9&-]+$/; // NSE symbol charset
 const HEADER_RE = /^(SYMBOL|SYMBOLS|TICKER|NAME|SCRIP|STOCK|CODE)$/; // spreadsheet header rows
@@ -319,6 +355,10 @@ export default function Trinetra() {
   const [savedUni, setSavedUni] = useState(null);      // this browser's remembered list
   const [cap, setCap] = useState(null);                // learned from the server, never assumed
   const [lookupSymbol, setLookupSymbol] = useState("");
+  const [navGroup, setNavGroup] = useState(null);
+  /* State only; the fetch lives below, after liveBackend exists. */
+  const [sizingCfg, setSizingCfg] = useState(null);
+  const [holidayCount, setHolidayCount] = useState(null);
   /* Device-only, same value the Positions backup block writes. Read into state
      so the storage poll and the Retry button agree on whether it exists. */
   const [backupToken, setBackupToken] = useState("");
@@ -490,6 +530,19 @@ export default function Trinetra() {
     const id = setInterval(loadStorage, 120000);
     return () => clearInterval(id);
   }, [liveBackend, loadStorage]);
+
+  /* Read purely so the setup card can say what is missing. Cheap, once.
+     Declared here rather than beside its useState: it reads liveBackend, which
+     is defined further down the component, and a hook above that line throws
+     on first render. Third time this file has caught me that way. */
+  useEffect(() => {
+    if (!liveBackend || !desk || !backendUrl) return;
+    desk.sizingConfig().then(setSizingCfg).catch(() => {});
+    fetch(backendUrl.replace(/\/$/, "") + "/alerts/status", { cache: "no-store" })
+      .then(r => r.json())
+      .then(j => setHolidayCount(j?.holidaysLoaded ?? j?.holidays?.length ?? null))
+      .catch(() => {});
+  }, [liveBackend, desk, backendUrl]);
 
   /* profileResults carries lockQuality per profile on every snapshot row, so the
      live state covers stocks that are partially locked right now without ever
@@ -994,6 +1047,11 @@ export default function Trinetra() {
      that says nothing new is friction. The framing and the disclaimer it used to
      carry now live in the About panel, one tap from the header. */
 
+  const navCounts = {
+    fired: signals.length, held: held.size,
+    universe: uniList.length, criteria: activeCount,
+  };
+
   return (
     <div style={{ minHeight: "100vh", background: T.bg, color: T.ink, fontFamily: T.sans }}>
       <style dangerouslySetInnerHTML={{ __html: css }} />
@@ -1059,42 +1117,58 @@ export default function Trinetra() {
           </div>
         )}
 
-        {/* action strip */}
+        {/* Silent misconfiguration is the app's most common failure: capital sat
+            at zero for months with sizing quietly switched off. Say it here. */}
+        {liveBackend && (
+          <SetupCard sizing={sizingCfg} storage={storage} holidayCount={holidayCount}
+            alertsArmed={alertStatus ? !!(tg.on || notifOn) : null}
+            onGo={id => setPanel(id)} />
+        )}
+
+        {/* ── navigation ────────────────────────────────────────────────
+            Eleven equally-weighted chips made the app a control panel: daily
+            work, reference, configuration and a separate product all shouting
+            at the same volume, leaving the triage to the user. Four groups,
+            opened one at a time.
+
+            Deliberately a navigation change only — every panel below is
+            untouched and still keyed off `panel`, so this layer can be lifted
+            out without disturbing anything it fronts. (Tag v1 is the flat
+            strip, if this turns out to be worse.) */}
         <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
-          <button onClick={() => setPanel("criteria")} style={chip(true)}>
-            Criteria <span style={{ color: T.brass, fontFamily: T.mono }}>{activeCount}</span>
-          </button>
-          <button onClick={() => setPanel("alerts")} style={chip()}>
-            Alerts {(tg.on || notifOn) && <span style={{ color: T.green }}>●</span>}
-          </button>
-          <button onClick={() => setPanel("oracle")} style={chip(kronEnabled)}>
-            <span style={{ fontSize: 12 }}>◉</span> Oracle
-            {kronEnabled && <span style={{ color: T.green }}>●</span>}
-            {!ORACLE_ENABLED && <span title="Forecasts paused" style={{ color: T.amber, fontFamily: T.mono, fontSize: 9 }}>⏸</span>}
-          </button>
-          {/* Fundamentals — the whole scraped matrix, and where fundamental
-              filters get built. The count is checks on the F criterion. */}
-          <button onClick={() => setPanel("fundamentals")} style={chip(panel === "fundamentals")}>
-            <LedgerGlyph size={12} color={panel === "fundamentals" ? T.brass : T.mute} /> Fundamentals
-            <span style={{ color: fundCrit?.enabled ? T.brass : T.dimSolid, fontFamily: T.mono }}>{fundChecks.length}</span>
-          </button>
-          <button onClick={() => setPanel("playbook")} style={chip(panel === "playbook")}>◧ Playbook</button>
-          <button onClick={() => setPanel("help")} style={chip(panel === "help")} title="How to use Trinetra">? Help</button>
-          <button onClick={() => setPanel("brief")} style={chip(panel === "brief")}>☀ Brief</button>
-          <button onClick={() => setPanel("positions")} style={chip(panel === "positions")}>
-            ◱ Positions {held.size > 0 && <span style={{ color: T.brass, fontFamily: T.mono }}>{held.size}</span>}
-          </button>
-          {/* Track Record — is any of this worth paying for. Server-backed. */}
-          <button onClick={() => setPanel("track")} style={chip(panel === "track")}>
-            <RecordGlyph size={12} color={panel === "track" ? T.brass : T.mute} /> Track Record
-          </button>
-          <button onClick={() => setPanel("universe")} style={chip()}>Universe <span style={{ color: T.mute, fontFamily: T.mono }}>{uniList.length}</span></button>
-          {/* Pravesh — IPO intelligence from a separate engine, read-only here.
-              Opens in place: the screener keeps ticking behind the drawer. */}
+          {NAV.map(g => {
+            const on = navGroup === g.id;
+            const here = g.items.some(i => i.id === panel);
+            return (
+              <button key={g.id} onClick={() => setNavGroup(on ? null : g.id)} style={chip(on || here)}>
+                {g.glyph} {g.label}
+                {g.badge?.(navCounts) != null && (
+                  <span style={{ color: T.brass, fontFamily: T.mono }}>{g.badge(navCounts)}</span>
+                )}
+              </button>
+            );
+          })}
+          {/* Pravesh is a different product read-only in here, not a section of
+              this one. It keeps its own entry rather than hiding inside a group. */}
           <button onClick={() => setPanel("pravesh")} style={chip(panel === "pravesh")}>
             <DoorGlyph size={12} color={panel === "pravesh" ? T.brass : T.mute} /> Pravesh
           </button>
         </div>
+
+        {/* the open group's members */}
+        {navGroup && (
+          <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 9, paddingLeft: 2 }}>
+            {(NAV.find(g => g.id === navGroup)?.items || []).map(it => (
+              <button key={it.id} onClick={() => setPanel(it.id)}
+                style={{ ...chip(panel === it.id), fontSize: 11, padding: "5px 9px" }}>
+                {it.label}
+                {it.badge?.(navCounts) != null && (
+                  <span style={{ color: T.brass, fontFamily: T.mono }}> {it.badge(navCounts)}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* signals */}
         <section style={{ marginTop: 22 }}>
