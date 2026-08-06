@@ -224,6 +224,62 @@ const NAV = [
     ] },
 ];
 
+
+/* Cold start is not silence. A woken free instance takes minutes to finish its
+   first pass, and for that whole window /snapshot has no rows — which the app
+   used to render as "nothing matched". That is an assertion about the market
+   made from an absence of data about the market.
+
+   Three states, and only the third is allowed to say nothing matched. */
+function ScanState({ scan }) {
+  const [left, setLeft] = React.useState(null);
+  React.useEffect(() => {
+    if (!scan?.warming || scan.etaSeconds == null) { setLeft(null); return; }
+    setLeft(scan.etaSeconds);
+    const id = setInterval(() => setLeft(v => (v == null ? null : Math.max(0, v - 1))), 1000);
+    return () => clearInterval(id);
+  }, [scan?.warming, scan?.etaSeconds]);
+
+  if (!scan) return null;
+
+  if (scan.warming) {
+    return (
+      <div style={{ background: T.brassSoft, border: "1px solid " + T.brass + "3A", borderRadius: 10,
+        padding: "11px 13px", marginBottom: 10 }}>
+        <div style={{ display: "flex", gap: 9, alignItems: "baseline", flexWrap: "wrap" }}>
+          <span style={{ fontFamily: T.mono, fontSize: 9.5, letterSpacing: 1.3, color: T.brass }}>FIRST SCAN RUNNING</span>
+          {left != null && (
+            <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink }}>
+              ~{left > 60 ? `${Math.ceil(left / 60)}m` : `${left}s`} left
+            </span>
+          )}
+          {scan.symbols != null && scan.universe != null && (
+            <span style={{ fontFamily: T.mono, fontSize: 10, color: T.dimSolid }}>{scan.symbols}/{scan.universe}</span>
+          )}
+        </div>
+        {/* The backend wrote this sentence for exactly this screen. */}
+        {scan.message && (
+          <div style={{ fontSize: 11.5, color: T.mute, lineHeight: 1.6, marginTop: 5 }}>{scan.message}</div>
+        )}
+      </div>
+    );
+  }
+
+  /* Rows are real prices, just from the previous pass. Not a warning — a
+     timestamp, so a stale number is never mistaken for a live one. */
+  if (scan.restoredFromCache) {
+    const t = scan.lastCompletedAt
+      ? new Date(scan.lastCompletedAt).toLocaleTimeString("en-IN", { hour12: false, hour: "2-digit", minute: "2-digit" })
+      : null;
+    return (
+      <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.amber, marginBottom: 9, lineHeight: 1.6 }}>
+        Showing the last completed scan{t ? ` — ${t}` : ""}. A fresh pass is running; these prices are real but not current.
+      </div>
+    );
+  }
+  return null;
+}
+
 const UNI_KEY = "trinetra.universe";
 const SYM_RE = /^[A-Z0-9&-]+$/; // NSE symbol charset
 const HEADER_RE = /^(SYMBOL|SYMBOLS|TICKER|NAME|SCRIP|STOCK|CODE)$/; // spreadsheet header rows
@@ -356,6 +412,11 @@ export default function Trinetra() {
   const [cap, setCap] = useState(null);                // learned from the server, never assumed
   const [lookupSymbol, setLookupSymbol] = useState("");
   const [navGroup, setNavGroup] = useState(null);
+  /* Whether the backend has actually evaluated anything yet. Render's free tier
+     sleeps after ~15 minutes idle and a full pass takes minutes on wake, so
+     "nothing matched" and "nothing has been scanned" look identical without
+     this — and the app was asserting the first while the truth was the second. */
+  const [scan, setScan] = useState(null);
   const [briefOpen, setBriefOpen] = useState(true);
   useEffect(() => { try { setBriefOpen(localStorage.getItem("trinetra.briefOpen") !== "0"); } catch {} }, []);
   /* State only; the fetch lives below, after liveBackend exists. */
@@ -763,6 +824,7 @@ export default function Trinetra() {
         const res = await fetch(r.backendUrl.replace(/\/$/, "") + "/snapshot");
         const j = await res.json();
         setConn(c => ({ ...c, state: "live", lastSync: new Date().toLocaleTimeString("en-IN", { hour12: false }), delayed: j.delayed, provider: j.provider }));
+        setScan(j.scan || null);
         setStocks(prev => {
           const by = Object.fromEntries(prev.map(p => [p.symbol, p]));
           const n = (j.data || []).map(d => { const old = by[d.symbol]; const hist = old ? [...old.hist.slice(-59), d.price] : [d.price]; return { hist, ...d, fund: d.fund || null }; });
@@ -1233,14 +1295,26 @@ export default function Trinetra() {
               </div>
             ) : null;
           })()}
+          <ScanState scan={scan} />
           <SectionLabel>Signals — the eye is open</SectionLabel>
           {signals.length === 0 ? (
             <div style={{ border: "1px dashed " + T.line, borderRadius: 12, padding: "28px 20px", textAlign: "center" }}>
               <div style={{ width: 34, height: 34, margin: "0 auto 12px", borderRadius: 99, border: "1px solid " + T.line, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <div style={{ width: 20, height: 3, borderRadius: 2, background: T.dimSolid }} />
               </div>
-              <div style={{ fontSize: 13, color: T.mute }}>Watching in silence.</div>
-              <div style={{ fontSize: 12, color: T.dimSolid, marginTop: 3 }}>A stock surfaces the moment all {activeCount} criteria lock together.</div>
+              {scan?.warming ? (
+                <>
+                  <div style={{ fontSize: 13, color: T.mute }}>Nothing evaluated yet.</div>
+                  <div style={{ fontSize: 12, color: T.dimSolid, marginTop: 3 }}>
+                    The first scan is still running — this is not a finding about the market.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: 13, color: T.mute }}>Watching in silence.</div>
+                  <div style={{ fontSize: 12, color: T.dimSolid, marginTop: 3 }}>A stock surfaces the moment all {activeCount} criteria lock together.</div>
+                </>
+              )}
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
