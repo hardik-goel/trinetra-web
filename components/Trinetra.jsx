@@ -564,9 +564,18 @@ export default function Trinetra() {
          silence loses the difference between "this failed" and "we could not
          tell" — which is the entire reason requireAll exists. */
       if (pr?.lockQuality || pr?.withheldForMissingData) {
+        const warnings = pr.warnings || pr.criteriaWarnings || [];
+        /* /signals/preview returns withheldForMissingData explicitly; /snapshot
+           rows do not carry it, but they do carry the server's "Withheld: …"
+           sentence. Read the flag when it is there and fall back to the string
+           the server itself wrote, rather than leaving the state invisible on
+           the only surface that lists every stock. */
         m[s.symbol] = { lockQuality: pr.lockQuality, lockedOn: pr.lockedOn,
-          notEvaluated: pr.notEvaluated, withheld: !!pr.withheldForMissingData,
-          criteriaWarnings: pr.warnings || pr.criteriaWarnings };
+          notEvaluated: pr.notEvaluated,
+          withheld: pr.withheldForMissingData != null
+            ? !!pr.withheldForMissingData
+            : warnings.some(w => /^withheld\b/i.test(w)),
+          criteriaWarnings: warnings };
       }
     }
     return m;
@@ -747,7 +756,7 @@ export default function Trinetra() {
 
   useEffect(() => {
     if (paused) return;
-    const id = setInterval(async () => {
+    const tick = async () => {
       const r = R.current;
       if (r.mode === "demo") { setStocks(prev => { const n = prev.map(demoTick); fireAlerts(n); return n; }); return; }
       if (!r.backendUrl) return;
@@ -761,7 +770,13 @@ export default function Trinetra() {
           fireAlerts(n); return n;
         });
       } catch { setConn(c => ({ ...c, state: "error" })); }
-    }, pollSeconds * 1000);
+    };
+    /* Leading edge, then the interval. setInterval alone waits a full period
+       before the first call — harmless at the old 3s default, but once the live
+       floor became 60s it meant a minute of demo prices on screen after every
+       load, with nothing saying they were demo. */
+    tick();
+    const id = setInterval(tick, pollSeconds * 1000);
     return () => clearInterval(id);
   }, [paused, pollSeconds, fireAlerts]);
 
@@ -1243,9 +1258,12 @@ export default function Trinetra() {
                       ₹{fmtIN(g.price)} · vol {g.ev.volX?.toFixed(1)}× · {g.ev.count}/{g.ev.total} locked
                       {lockInfo[g.symbol]?.lockQuality === "partial" && " · PARTIAL"}
                       {lockInfo[g.symbol]?.withheld && (
-                        <span title={"Everything that could be judged passed. Held back because " +
-                          ((lockInfo[g.symbol].notEvaluated || []).join(", ") || "a criterion") +
-                          " had no data — this profile requires all criteria."}
+                        /* The server writes the "Withheld: … would otherwise have
+                           locked on 3 of 4" sentence. Render that rather than a
+                           second description of the same rule that cannot see
+                           which criterion actually went missing. */
+                        <span title={(lockInfo[g.symbol].criteriaWarnings || []).find(w => /^withheld/i.test(w))
+                          || "Everything judgeable passed; held back because a criterion had no data."}
                           style={{ color: T.amber }}> · WITHHELD, NOT FAILED</span>
                       )}
                     </div>
@@ -1389,6 +1407,25 @@ export default function Trinetra() {
                         style={{ fontFamily: T.mono, fontSize: 8, letterSpacing: .6, color: T.brass,
                           border: "1px solid " + T.brass + "55", borderRadius: 4, padding: "1px 4px" }}>{l}</span>
                     ))}
+                    {/* These belong on the watchlist row, not only on a fired
+                        signal. A partial lock may never fire, and a WITHHELD one
+                        by definition did not — rendering it in the signals list
+                        alone made that badge unreachable. Both are facts about a
+                        stock you are watching, so they live where the stock is. */}
+                    {lockInfo[s.symbol]?.lockQuality === "partial" && !lockInfo[s.symbol]?.withheld && (
+                      <span title={"Locked without evaluating: " + ((lockInfo[s.symbol].notEvaluated || []).join(", ") || "a criterion")}
+                        style={{ fontFamily: T.mono, fontSize: 8, letterSpacing: .6, color: T.amber,
+                          border: "1px solid " + T.amber + "55", borderRadius: 4, padding: "1px 4px" }}>PARTIAL</span>
+                    )}
+                    {lockInfo[s.symbol]?.withheld && (
+                      /* The server writes "Withheld: … would otherwise have locked
+                         on 3 of 4." Render its sentence rather than a second
+                         description that cannot see which criterion went missing. */
+                      <span title={(lockInfo[s.symbol].criteriaWarnings || []).find(w => /^withheld/i.test(w))
+                        || "Everything judgeable passed; held back because a criterion had no data."}
+                        style={{ fontFamily: T.mono, fontSize: 8, letterSpacing: .6, color: T.amber,
+                          border: "1px solid " + T.amber, borderRadius: 4, padding: "1px 4px" }}>WITHHELD</span>
+                    )}
                     {events?.[s.symbol]?.events?.[0] && (
                       <span title={`${events[s.symbol].events[0].type} on ${events[s.symbol].events[0].date}`}
                         style={{ fontFamily: T.mono, fontSize: 8, letterSpacing: .6, color: T.amber,
