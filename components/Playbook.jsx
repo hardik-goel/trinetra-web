@@ -395,6 +395,14 @@ function Detail({ pb, onHold, held, busy, onAddCall, shortability }) {
         </div>
       )}
 
+      {/* Beside the numbers, not under them: a signal can lock cleanly and
+          still be a bad bet, and on a short the losing side is unbounded. */}
+      {pb.riskRewardWarning && (
+        <div style={{ background: T.red + "12", border: "1px solid " + T.red + "55", borderLeft: "3px solid " + T.red,
+          borderRadius: 9, padding: "10px 12px", marginBottom: 10, fontSize: 12.5, color: T.red, lineHeight: 1.6 }}>
+          {pb.riskRewardWarning}
+        </div>
+      )}
       {isShort(pb) && <ShortabilityBlock s={shortability || pb.shortability} clamped={pb.horizonClamped} />}
       {isShort(pb) && <LotNote s={shortability || pb.shortability} />}
 
@@ -601,10 +609,7 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
   const [detail, setDetail] = useState(null);
   const [sort, setSort] = useState({ key: "potential", dir: "desc" });
   const [stateFilter, setStateFilter] = useState("");
-  /* symbol -> shortability, filled from /shortability for rows that are shorts.
-     The rows themselves do not carry it yet; when they start to, row data wins
-     and this simply stops being consulted. */
-  const [shortInfo, setShortInfo] = useState({});
+
 
   const load = useCallback(async () => {
     if (!api) return;
@@ -614,25 +619,7 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
   }, [api, profile]);
   useEffect(() => { load(); }, [load]);
 
-  /* One lookup per short symbol, once. Whether a short can be carried overnight
-     decides whether the row is actionable at all, so it cannot wait for the
-     user to open a detail drawer. */
-  useEffect(() => {
-    if (!api || !rows) return;
-    const wanted = rows.filter(r => (r.direction || "").toLowerCase() === "sell" && !r.shortability)
-      .map(r => r.symbol).filter(sym => !(sym in shortInfo));
-    if (!wanted.length) return;
-    let live = true;
-    (async () => {
-      const found = {};
-      for (const sym of wanted.slice(0, 40)) {
-        try { found[sym] = await api.shortability(sym); }
-        catch { found[sym] = null; /* absent stays absent — never guessed */ }
-      }
-      if (live && Object.keys(found).length) setShortInfo(p => ({ ...p, ...found }));
-    })();
-    return () => { live = false; };
-  }, [api, rows]); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   const openRow = async (symbol) => {
     if (open === symbol) { setOpen(null); return; }
@@ -682,9 +669,8 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
      labels; a combined "Entry / Sell at" described neither accurately. */
   const shortRows = sorted.filter(isShort);
   const anyShort = shortRows.length > 0;
-  /* Playbook rows arrive with shortability null today, so fall back to the
-     standalone lookup this panel fetches per short symbol. */
-  const shortOf = r => r.shortability || shortInfo[r.symbol] || null;
+  /* Rows carry shortability inline as of 0f4d616 — no second call. */
+  const shortOf = r => r.shortability || null;
   const uniq = (k, fb) => [...new Set(sorted.map(r => r[k] || fb(r)))];
   const actions = uniq("actionLabel", r => (r.direction === "sell" ? "Sell at" : "Entry"));
   const targets = uniq("targetLabel", r => (r.direction === "sell" ? "Buy back" : "Target"));
@@ -802,7 +788,24 @@ export default function Playbook({ backendUrl, live, profileId, profiles, held, 
               title: "The horizon of the profile this row actually locked under. A dash means it has not locked under any." },
             { key: "confidence", label: "Confidence", type: "number",
               value: r => r.entry?.confidence?.score,
-              render: r => <Confidence c={r.entry?.confidence} compact onExpand={() => openRow(r.symbol)} /> },
+              /* A high score and a losing ratio are not in tension — confidence
+                 measures agreement between methods, not whether the bet pays.
+                 Putting the warning anywhere but here lets the score be read
+                 alone, and on a short the losing side has no ceiling. */
+              render: r => <span>
+                <Confidence c={r.entry?.confidence} compact onExpand={() => openRow(r.symbol)} />
+                {/* The server's wording when it sends one. Playbook rows carry
+                    riskRewardWarning null today — only /signals/preview fills
+                    it — so a sub-1:1 ratio still gets said here rather than
+                    waiting for the string to arrive. The score must never be
+                    readable on its own. */}
+                {(r.riskRewardWarning || (rrOf(r)?.toPrimary != null && rrOf(r).toPrimary < 1)) && (
+                  <div style={{ fontSize: 9.5, color: T.red, lineHeight: 1.45, marginTop: 3, maxWidth: 190 }}>
+                    ⚠ {r.riskRewardWarning
+                      || `Risk-reward to the primary target is ${(+rrOf(r).toPrimary).toFixed(2)}:1 — below 1:1, so the maths is against this regardless of how the setup looks.`}
+                  </div>
+                )}
+              </span> },
           ]} />
       )}
 
