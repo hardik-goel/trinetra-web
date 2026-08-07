@@ -1052,15 +1052,20 @@ export default function Trinetra() {
       });
     const { key, dir } = wlSort;
     const sign = dir === "asc" ? 1 : -1;
-    /* The three "no number" cases are not interchangeable and must not collapse
+    /* The four "no number" cases are not interchangeable and must not collapse
        into one bucket: noEstimate is by design (long term), insufficientHistory
-       is too few analogs, and 0-with-exhausted is a real range that is spent —
-       which sorts as the low value it is, not as missing. null means no view,
-       never no upside, so it sorts last in both directions. */
+       is too few analogs, noRoom is a target that was computed and rejected,
+       and 0-with-exhausted is a real range that is spent — which sorts as the
+       low value it is, not as missing. null means no view, never no upside, so
+       it sorts last in both directions.
+
+       noRoom nulls both columns, not just one: the remaining percentage and the
+       ratio are two readings of the same discarded level, so ranking by either
+       ranks by a number the engine refused to publish. */
     const valueOf = ({ s, ev }) =>
       key === "confidence" ? decisionOf(s)?.confidence?.score ?? null
-      : key === "remaining" ? (decisionOf(s)?.noEstimate || decisionOf(s)?.insufficientHistory ? null : decisionOf(s)?.remainingMedianPct ?? null)
-      : key === "rr" ? decisionOf(s)?.rrToPrimary ?? null
+      : key === "remaining" ? (decisionOf(s)?.noRoom || decisionOf(s)?.noEstimate || decisionOf(s)?.insufficientHistory ? null : decisionOf(s)?.remainingMedianPct ?? null)
+      : key === "rr" ? (decisionOf(s)?.noRoom ? null : decisionOf(s)?.rrToPrimary ?? null)
       : key === "criteria" ? ev.count
       : key === "price" ? s.price
       : key === "dayChgPct" ? ev.dayChg
@@ -1529,15 +1534,23 @@ export default function Trinetra() {
                     const d = profileSel !== "ALL" ? s.decisions?.[profileSel] : null;
                     if (!d) return null;
                     const c = d.confidence || {};
-                    const potential = d.noEstimate ? "no estimate for this horizon"
+                    /* A target computed and rejected outranks every other
+                       reading on this line. "est. +3.1% left" would be the
+                       percentage of the target that was thrown away, and the
+                       R:R beside it belongs to the same discarded level. */
+                    const potential = d.noRoom ? "no target offered"
+                      : d.noEstimate ? "no estimate for this horizon"
                       : d.insufficientHistory ? `too few analogs (n=${d.analogsN ?? 0})`
                       : d.exhausted ? "typical move spent"
                       : d.remainingMedianPct != null ? `est. ${d.remainingMedianPct > 0 ? "+" : ""}${d.remainingMedianPct.toFixed(1)}% left · n=${d.analogsN ?? 0}` : null;
                     return (
                       <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid, marginTop: 3, display: "flex", gap: 8, flexWrap: "wrap" }}>
                         {c.score != null && <span>conf {c.score} {c.band}{c.capped ? " · capped" : ""}</span>}
-                        {potential && <span style={{ color: d.exhausted ? T.amber : T.dimSolid }}>{potential}</span>}
-                        {d.rrToPrimary != null && <span style={{ color: d.rrToPrimary < 1 ? T.red : T.dimSolid }}>R:R {d.rrToPrimary.toFixed(1)}</span>}
+                        {potential && (
+                          <span title={d.noRoom ? "A target was computed and rejected for sitting closer than the stop." : undefined}
+                            style={{ color: d.noRoom ? T.red : d.exhausted ? T.amber : T.dimSolid }}>{potential}</span>
+                        )}
+                        {!d.noRoom && d.rrToPrimary != null && <span style={{ color: d.rrToPrimary < 1 ? T.red : T.dimSolid }}>R:R {d.rrToPrimary.toFixed(1)}</span>}
                       </div>
                     );
                   })()}
