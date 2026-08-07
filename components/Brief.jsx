@@ -150,9 +150,13 @@ function ExitLevels({ sig }) {
           measured from {rupee(px, 2)} — where this trade starts, not the {rupee(sig.price, 2)} it fired at
         </div>
       )}
+      {/* Every record that predates the stored basis lands here, so it is kept
+          short — a long caveat on every legacy row is one the reader stops
+          seeing before the row where it matters. */}
       {!basis.exact && cells.length > 0 && (
-        <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid, marginTop: 4 }}>
-          measured from the price at the signal — this record predates the entry basis being stored
+        <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid, marginTop: 4 }}
+          title="This record does not carry the price the engine measured from, so the signal price is used. On a setup that had not triggered, the real basis was the trigger.">
+          measured from the signal price · basis not recorded
         </div>
       )}
       {flat && (
@@ -163,6 +167,20 @@ function ExitLevels({ sig }) {
     </div>
   );
 }
+
+/* Cards that tell you to CLOSE something, not to open it.
+
+   "I took this" writes a new long. On one of these it would record a position
+   from a signal to exit one — the levels point the wrong way and the entry is
+   a price you are supposed to be selling at. The backend now rejects it with a
+   400, which turns a silently wrong holding into a visible error; neither is
+   the right outcome, so the button does not appear.
+
+   Keyed on the profile ids the backend names rather than on `direction`: a
+   `short` signal is also direction "sell" and IS an entry, and the two must
+   not be collapsed. */
+const EXIT_PROFILES = new Set(["sell_holdings", "buyback_holdings"]);
+const isExitCard = (sig) => EXIT_PROFILES.has(sig?.profileId);
 
 function SignalCard({ sig, onHold, held, busy, onTook, tookBusy }) {
   const [open, setOpen] = useState(false);
@@ -199,6 +217,10 @@ function SignalCard({ sig, onHold, held, busy, onTook, tookBusy }) {
       <div style={{ marginTop: 9, display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap" }}>
         {held
           ? <span style={{ fontFamily: T.mono, fontSize: 10, color: T.green }}>✓ in your book</span>
+          : isExitCard(sig)
+          ? <span style={{ fontSize: 11, color: T.dimSolid, lineHeight: 1.5 }}>
+              This is a signal to close a position, not to open one — it has nothing to record.
+            </span>
           : <>
               {/* One tap records the real position with the levels this signal
                   is showing — the stop and target the exit rules then run
@@ -258,6 +280,9 @@ export default function Brief({ backendUrl, live, onLeave }) {
      expensive direction for STCG; saying it explicitly avoids that. */
   const [tookBusy, setTookBusy] = useState(null);
   const took = async (sig) => {
+    // The button is not rendered on these; the guard is here so a future caller
+    // cannot reintroduce the 400 by wiring it up somewhere else.
+    if (isExitCard(sig)) return;
     setTookBusy(sig.symbol);
     try {
       const e = sig.exitLevels || {};
