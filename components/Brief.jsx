@@ -287,7 +287,7 @@ function SignalCard({ sig, onHold, held, busy, onTook, tookBusy }) {
   );
 }
 
-export default function Brief({ backendUrl, live, onLeave }) {
+export default function Brief({ backendUrl, live, onLeave, exitsPerAccount }) {
   const api = useMemo(() => (backendUrl ? deskApi(backendUrl) : null), [backendUrl]);
   const [brief, setBrief] = useState(null);
   const [held, setHeld] = useState(new Set());
@@ -429,12 +429,37 @@ export default function Brief({ backendUrl, live, onLeave }) {
         <div style={{ marginTop: 20, border: "1px dashed " + T.line, borderRadius: 12, padding: "26px 20px", textAlign: "center" }}>
           <div style={{ fontSize: 13.5, color: T.ink }}>Nothing needs your attention this morning.</div>
           <div style={{ fontSize: 12, color: T.dimSolid, marginTop: 5, lineHeight: 1.6 }}>
-            No exit rule fired, no new signal locked, no IPO closing and no event inside three sessions.
-            The scan kept running — silence here is a result, not a failure.
+            {/* "No exit rule fired" is a claim about your holdings. On an
+                instance with accounts the exit scan does not run for them yet,
+                so that claim would be unearned — say what was actually
+                checked. */}
+            {exitsPerAccount
+              ? "No new signal locked, no IPO closing and no event inside three sessions. Exit rules on your holdings were not checked — see below."
+              : "No exit rule fired, no new signal locked, no IPO closing and no event inside three sessions."}
+            {" "}The scan kept running — silence here is a result, not a failure.
           </div>
         </div>
       ) : (
         <>
+          {/* Not an empty state — a scope statement. The exit and cycle scans
+              still read the instance-wide holdings file, so the backend skips
+              them for a signed-in account rather than mailing everyone about
+              one person's positions. An absent section here would read as
+              "your holdings are fine". */}
+          {exitsPerAccount && (
+            <div style={{ marginTop: 18, background: T.amber + "10", border: "1px solid " + T.amber + "40",
+              borderLeft: "3px solid " + T.amber, borderRadius: 9, padding: "10px 12px" }}>
+              <div style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1.2, color: T.amber, marginBottom: 4 }}>
+                EXIT RULES NOT RUN
+              </div>
+              <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6 }}>
+                Exit and buy-back scans are not per-account yet, so they are skipped for signed-in users rather
+                than run against someone else&apos;s book. Nothing here says your holdings are fine — it says they
+                were not checked. Your stops are yours to watch until this ships.
+              </div>
+            </div>
+          )}
+
           {/* 1 · money already at risk */}
           {exits.length > 0 && <>
             <Label accent={T.red} count={exits.length}>Exit signals on your holdings</Label>

@@ -7,6 +7,8 @@ import Brief from "./Brief";
 import { DecisionStrip } from "./Decision";
 import { trackApi } from "../lib/track";
 import { deskApi } from "../lib/desk";
+import { request } from "../lib/api";
+import { AccountPanel, AlertPrefsPanel, OwnerPanel } from "./Account";
 import ProfileCriteria from "./ProfileCriteria";
 import StockDecision from "./StockDecision";
 import Guide from "./Guide";
@@ -376,7 +378,24 @@ function StatusDot({ state }) {
   </span>;
 }
 
-export default function Trinetra() {
+export default function Trinetra({ session }) {
+  /* Supplied by AuthGate. `single-user` is a real instance mode, not a
+     fallback — an instance with no accounts behaves exactly as it did
+     before a9d587b, so the account nav simply does not appear. */
+  const acct = session || { mode: "single-user", user: null, isAdmin: false };
+  const multiUser = acct.mode === "multi-user";
+  /* The account surfaces only exist once the instance has accounts, and
+     the owner panel only for the owner — a nav entry that always 403s is
+     worse than no entry, because it reads as something the user is
+     failing to use rather than something that is not theirs. */
+  const nav = useMemo(() => NAV.map(g => g.id !== "setup" ? g : {
+    ...g,
+    items: [
+      ...g.items,
+      ...(multiUser ? [{ id: "account", label: "Account" }, { id: "myalerts", label: "My alerts" }] : []),
+      ...(multiUser && acct.isAdmin ? [{ id: "owner", label: "Accounts & invites" }] : []),
+    ],
+  }), [multiUser, acct.isAdmin]);
   const [onboarded, setOnboarded] = useState(true);   // no landing gate — see the About panel
   /* The brief is the landing view on a weekday morning, because that is when it
      is the only thing worth reading. It is a default, never a trap: the panel's
@@ -482,8 +501,7 @@ export default function Trinetra() {
   const loadFundamentals = useCallback(async url => {
     const base = (url || backendUrl).replace(/\/$/, "");
     try {
-      const res = await fetch(base + "/fundamentals");
-      const j = await res.json();
+      const j = await request(base, "/fundamentals");
       if (j && typeof j === "object" && !Array.isArray(j)) setFunds(j);
     } catch { /* the feed panel already reports connection trouble */ }
     /* How much of the universe has fundamentals cached. Below 100% the engine
@@ -492,7 +510,7 @@ export default function Trinetra() {
        three. Separate call, separate failure: an older backend without this
        route must not take the matrix down with it. */
     try {
-      const c = await fetch(base + "/fundamentals/coverage").then(r => (r.ok ? r.json() : null));
+      const c = await request(base, "/fundamentals/coverage").catch(() => null);
       if (c && typeof c.pct === "number") setFundCoverage(c);
     } catch { /* optional surface */ }
   }, [backendUrl]);
@@ -507,9 +525,7 @@ export default function Trinetra() {
   const refreshFund = async symbol => {
     setFundBusy(symbol); setFundMsg("");
     try {
-      const res = await fetch(api("/fundamentals/refresh"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol }) });
-      const rec = await res.json();
-      if (!res.ok) throw new Error(rec.error || `HTTP ${res.status}`);
+      const rec = await request(backendUrl, "/fundamentals/refresh", { method: "POST", body: { symbol } });
       setFunds(f => ({ ...f, [symbol]: rec }));
       setFundMsg(`${symbol}: ${rec.status}${rec.source ? " via " + rec.source : ""}`);
     } catch (e) { setFundMsg(`${symbol}: refresh failed — ${e.message}`); }
@@ -519,9 +535,7 @@ export default function Trinetra() {
   const refreshAllFunds = async () => {
     setFundBusy("all"); setFundMsg("Scraping — paced ~1s per symbol, this takes a while…");
     try {
-      const res = await fetch(api("/fundamentals/refresh-all"), { method: "POST" });
-      const s = await res.json();
-      if (!res.ok) throw new Error(s.error || `HTTP ${res.status}`);
+      const s = await request(backendUrl, "/fundamentals/refresh-all", { method: "POST" });
       setFundMsg(`${s.refreshed} fetched · ${s.partial} partial · ${s.unavailable} unavailable`);
       loadFundamentals();
     } catch (e) { setFundMsg("Refresh-all failed — " + e.message); }
@@ -579,7 +593,7 @@ export default function Trinetra() {
        has the token, for pendingFiles, repo and the Retry button. */
     let base = null;
     try {
-      const h = await fetch(backendUrl.replace(/\/$/, "") + "/health", { cache: "no-store" }).then(r => r.json());
+      const h = await request(backendUrl, "/health");
       base = h?.storage || null;
     } catch { /* offline — leave whatever was last known */ }
 
@@ -606,8 +620,7 @@ export default function Trinetra() {
   useEffect(() => {
     if (!liveBackend || !desk || !backendUrl) return;
     desk.sizingConfig().then(setSizingCfg).catch(() => {});
-    fetch(backendUrl.replace(/\/$/, "") + "/alerts/status", { cache: "no-store" })
-      .then(r => r.json())
+    request(backendUrl, "/alerts/status")
       .then(j => setHolidayCount(j?.holidaysLoaded ?? j?.holidays?.length ?? null))
       .catch(() => {});
   }, [liveBackend, desk, backendUrl]);
@@ -680,8 +693,7 @@ export default function Trinetra() {
 
   const loadUniverse = useCallback(async url => {
     try {
-      const res = await fetch((url || backendUrl).replace(/\/$/, "") + "/universe");
-      const j = await res.json();
+      const j = await request(url || backendUrl, "/universe");
       if (!Array.isArray(j.symbols)) return;
       setUniverse(j.symbols);
       if (!readCache()) rememberUni(j.symbols); // first sight becomes the baseline
@@ -693,9 +705,7 @@ export default function Trinetra() {
   const uniPost = async (path, body, summarize) => {
     setUni({ busy: true, err: "", msg: "" });
     try {
-      const res = await fetch(api(path), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+      const j = await request(backendUrl, path, { method: "POST", body });
       setUniverse(j.symbols); rememberUni(j.symbols);
       setUni({ busy: false, err: "", msg: summarize ? summarize(j) : "" });
       return j;
@@ -825,8 +835,7 @@ export default function Trinetra() {
       if (r.mode === "demo") { setStocks(prev => { const n = prev.map(demoTick); fireAlerts(n); return n; }); return; }
       if (!r.backendUrl) return;
       try {
-        const res = await fetch(r.backendUrl.replace(/\/$/, "") + "/snapshot");
-        const j = await res.json();
+        const j = await request(r.backendUrl, "/snapshot");
         setConn(c => ({ ...c, state: "live", lastSync: new Date().toLocaleTimeString("en-IN", { hour12: false }), delayed: j.delayed, provider: j.provider }));
         setScan(j.scan || null);
         setStocks(prev => {
@@ -864,9 +873,7 @@ export default function Trinetra() {
     if (mode !== "live" || !backendUrl) return;
     setTgLoad({ busy: true, err: "" });
     try {
-      const res = await fetch(backendUrl.replace(/\/$/, "") + "/config");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const j = await res.json();
+      const j = await request(backendUrl, "/config");
       // An older backend returns no telegram block at all — say "unknown"
       // rather than render a confident "not armed" that may be false.
       setTgRemote(j?.alerts?.telegram || null);
@@ -887,11 +894,10 @@ export default function Trinetra() {
     if (mode !== "live" || !backendUrl) return null;
     const creds = typedTelegram();
     try {
-      const res = await fetch(backendUrl.replace(/\/$/, "") + "/config", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ criteria, ...(creds ? { alerts: { telegram: creds } } : {}) }),
+      const j = await request(backendUrl, "/config", {
+        method: "POST",
+        body: { criteria, ...(creds ? { alerts: { telegram: creds } } : {}) },
       });
-      const j = await res.json().catch(() => null);
       // The response carries the masked truth — adopt it rather than guess.
       if (j?.config?.alerts?.telegram) setTgRemote(j.config.alerts.telegram);
       return j;
@@ -901,8 +907,7 @@ export default function Trinetra() {
   const connect = async () => {
     setConn(c => ({ ...c, state: "connecting" }));
     try {
-      const res = await fetch(backendUrl.replace(/\/$/, "") + "/health");
-      const j = await res.json();
+      const j = await request(backendUrl, "/health");
       if (j.ok) { setMode("live"); setConn({ state: "live", lastSync: null, delayed: j.delayed, provider: j.provider }); loadUniverse(backendUrl); loadFundamentals(backendUrl); return true; }
     } catch {}
     setConn(c => ({ ...c, state: "error" })); return false;
@@ -1182,6 +1187,19 @@ export default function Trinetra() {
             <button onClick={() => setPanel("about")} title="About Trinetra"
               style={{ padding: "6px 9px", borderRadius: 7, border: "1px solid " + T.line, background: T.card, color: T.mute, fontSize: 12 }}>ⓘ</button>
             <button onClick={() => setPaused(p => !p)} title={paused ? "Resume" : "Pause"} style={{ padding: "6px 9px", borderRadius: 7, border: "1px solid " + T.line, background: T.card, color: T.mute, fontSize: 11 }}>{paused ? "▶" : "❚❚"}</button>
+            {/* Whose data this is. On a shared instance the universe, the
+                criteria and the signals all differ per account, so the answer
+                to "why is this not what I expected" is often just: you are
+                signed in as someone else. */}
+            {multiUser && acct.user && (
+              <button onClick={() => setPanel("account")} title={`Signed in as ${acct.user.email}`}
+                style={{ padding: "6px 9px", borderRadius: 7, border: "1px solid " + T.line, background: T.card,
+                  color: T.mute, fontSize: 11, fontFamily: T.mono, maxWidth: 150, overflow: "hidden",
+                  textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {acct.user.email.split("@")[0]}
+                {acct.isAdmin && <span style={{ color: T.brass }}> ◆</span>}
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -1242,7 +1260,7 @@ export default function Trinetra() {
             </button>
             {briefOpen && (
               <PraveshBoundary>
-                <Brief backendUrl={backendUrl} live={liveBackend} onLeave={() => {}} />
+                <Brief backendUrl={backendUrl} live={liveBackend} onLeave={() => {}} exitsPerAccount={multiUser} />
               </PraveshBoundary>
             )}
           </div>
@@ -1259,7 +1277,7 @@ export default function Trinetra() {
             out without disturbing anything it fronts. (Tag v1 is the flat
             strip, if this turns out to be worse.) */}
         <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
-          {NAV.map(g => {
+          {nav.map(g => {
             const on = navGroup === g.id;
             const here = g.items.some(i => i.id === panel);
             return (
@@ -1281,7 +1299,7 @@ export default function Trinetra() {
         {/* the open group's members */}
         {navGroup && (
           <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 9, paddingLeft: 2 }}>
-            {(NAV.find(g => g.id === navGroup)?.items || []).map(it => (
+            {(nav.find(g => g.id === navGroup)?.items || []).map(it => (
               <button key={it.id} onClick={() => setPanel(it.id)}
                 style={{ ...chip(panel === it.id), fontSize: 11, padding: "5px 9px" }}>
                 {it.label}
@@ -2452,6 +2470,18 @@ export default function Trinetra() {
         </PraveshBoundary>
       </Drawer>}
 
+      {panel === "account" && <Drawer title="Account" onClose={() => setPanel(null)}>
+        <AccountPanel backendUrl={backendUrl} session={acct} />
+      </Drawer>}
+
+      {panel === "myalerts" && <Drawer title="My alerts" onClose={() => setPanel(null)}>
+        <AlertPrefsPanel backendUrl={backendUrl} />
+      </Drawer>}
+
+      {panel === "owner" && <Drawer wide title="Accounts & invites" onClose={() => setPanel(null)}>
+        <OwnerPanel backendUrl={backendUrl} />
+      </Drawer>}
+
       {panel === "about" && <Drawer title="About Trinetra" onClose={() => setPanel(null)}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
           <div style={{ width: 46, height: 46, borderRadius: 99, border: "1px solid " + T.brass + "66", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -2487,11 +2517,11 @@ export default function Trinetra() {
       </Drawer>}
 
       {panel === "brief" && <Drawer wide title="Morning Brief" onClose={() => setPanel(null)}>
-        <PraveshBoundary><Brief backendUrl={backendUrl} live={liveBackend} onLeave={() => setPanel(null)} /></PraveshBoundary>
+        <PraveshBoundary><Brief backendUrl={backendUrl} live={liveBackend} onLeave={() => setPanel(null)} exitsPerAccount={multiUser} /></PraveshBoundary>
       </Drawer>}
 
       {panel === "positions" && <Drawer wide title="Positions" onClose={() => setPanel(null)}>
-        <PraveshBoundary><Positions backendUrl={backendUrl} live={liveBackend} storage={storage} /></PraveshBoundary>
+        <PraveshBoundary><Positions backendUrl={backendUrl} live={liveBackend} storage={storage} exitsPerAccount={multiUser} /></PraveshBoundary>
       </Drawer>}
 
       {/* track record — mounted only while open; it reads server-side history,

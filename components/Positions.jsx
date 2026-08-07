@@ -447,7 +447,7 @@ function Concentration({ conc, sizing, onSaveSizing, onBackup, onRestoreFile, bu
 }
 
 /* ── shell ───────────────────────────────────────────────────────── */
-export default function Positions({ backendUrl, live, storage }) {
+export default function Positions({ backendUrl, live, storage, exitsPerAccount }) {
   const api = useMemo(() => (backendUrl ? deskApi(backendUrl) : null), [backendUrl]);
   const [data, setData] = useState({ holdings: [], exits: [], armed: [], sell: [], buyBack: [], suppressed: [], conc: null, sizing: null });
   const [state, setState] = useState({ busy: true, err: "" });
@@ -509,10 +509,26 @@ export default function Positions({ backendUrl, live, storage }) {
       <Label accent={sorted.length ? T.red : T.brass}>
         {sorted.length ? `Exit signals · ${sorted.length}` : "Exit signals"}
       </Label>
+      {/* "No rule has fired" asserts the rules ran. On an instance with
+          accounts they are skipped for signed-in users — the scan still reads
+          the instance-wide holdings file — so the honest statement is that
+          nothing was checked, not that nothing was found. */}
       {!sorted.length ? (
-        <div style={{ border: "1px dashed " + T.line, borderRadius: 10, padding: "16px 14px", fontSize: 12, color: T.dimSolid, marginBottom: 16 }}>
-          No exit rule has fired on your open holdings. Rules keep running server-side every refresh.
-        </div>
+        exitsPerAccount ? (
+          <div style={{ background: T.amber + "10", border: "1px solid " + T.amber + "40", borderLeft: "3px solid " + T.amber,
+            borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
+            <div style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1.2, color: T.amber, marginBottom: 4 }}>NOT RUN</div>
+            <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6 }}>
+              Exit rules are not per-account yet, so they are skipped for signed-in users rather than run against
+              another account&apos;s book. This is not &ldquo;nothing fired&rdquo; — nothing was checked. Watch your own
+              stops until this ships.
+            </div>
+          </div>
+        ) : (
+          <div style={{ border: "1px dashed " + T.line, borderRadius: 10, padding: "16px 14px", fontSize: 12, color: T.dimSolid, marginBottom: 16 }}>
+            No exit rule has fired on your open holdings. Rules keep running server-side every refresh.
+          </div>
+        )
       ) : (
         <div style={{ marginBottom: 16 }}>
           {sorted.map(s => (

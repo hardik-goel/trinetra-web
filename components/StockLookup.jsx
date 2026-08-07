@@ -1,6 +1,7 @@
 "use client";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { deskApi, rupee, pctText } from "../lib/desk";
+import { request } from "../lib/api";
 import { ShortabilityBlock } from "./Shortability";
 
 /* ================================================================
@@ -126,12 +127,16 @@ export default function StockLookup({ backendUrl, live, initialSymbol, onHold, h
     if (!sym || !backendUrl) return;
     setBusy(true); setErr(null);
     try {
-      const res = await fetch(backendUrl.replace(/\/$/, "") + "/stock?symbol=" + encodeURIComponent(sym), { cache: "no-store" });
-      const j = await res.json().catch(() => null);
-      if (!res.ok) { setData(null); setErr(j || { error: `HTTP ${res.status}` }); }
-      else { setData(j); setErr(null); }
+      setData(await request(backendUrl, "/stock?symbol=" + encodeURIComponent(sym)));
+      setErr(null);
     } catch (e) {
-      setData(null); setErr({ error: "Backend unreachable — a sleeping free instance takes ~30s to wake." });
+      setData(null);
+      /* The 404 body is the useful part here — it carries didYouMean. A
+         network failure has no body, and saying "not found" for one would
+         be a different claim from the one the server made. */
+      setErr(e.body || { error: e.status
+        ? e.message
+        : "Backend unreachable — a sleeping free instance takes ~30s to wake." });
     } finally { setBusy(false); }
   }, [backendUrl]);
 
