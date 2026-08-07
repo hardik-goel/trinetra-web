@@ -87,9 +87,48 @@ function basisFor(sig) {
 const basisIsShifted = (basis, price) =>
   basis != null && price != null && Math.abs(basis - price) / price > 0.0025;
 
+/* What the alert said, for a record the read-time guard now withholds.
+
+   Deliberately behind a tap and deliberately not styled like the live cells.
+   These percentages went out in a Telegram message and the record is evidence
+   of that, so hiding them would erase something the user may remember
+   receiving — but they describe a trade the engine would refuse to emit today,
+   so showing them at the weight of a target would re-issue it. */
+function AsSent({ onRead, price }) {
+  const [open, setOpen] = useState(false);
+  const o = onRead.original || {};
+  const tiers = ["safe", "primary", "stretch"].filter(k => o[k] != null);
+  if (!tiers.length) return null;
+  return (
+    <div style={{ marginTop: 5 }}>
+      <button onClick={() => setOpen(v => !v)}
+        style={{ all: "unset", cursor: "pointer", fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid }}>
+        {open ? "hide what the alert said ▴" : "what the alert said ▾"}
+      </button>
+      {open && (
+        <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dimSolid, lineHeight: 1.7, marginTop: 4 }}>
+          {tiers.map(k => (
+            <div key={k}>
+              {k} {pctText(o[k])}
+              {price != null && <span style={{ color: T.dim }}> · {rupee(price * (1 + o[k] / 100), 2)}</span>}
+            </div>
+          ))}
+          {/* `why` is a full clause from the server — rendered as one, not
+              slotted into a sentence of mine that then reads twice. */}
+          <div style={{ color: T.dim, marginTop: 3, lineHeight: 1.5 }}>
+            {onRead.riskReward != null ? `${onRead.riskReward}:1 against the stop. ` : ""}
+            This is what went out — {onRead.why || "written before the risk-reward guard existed"}. History, not advice.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ExitLevels({ sig }) {
   const e = sig.exitLevels;
   const noRoom = noRoomOf(sig);
+  const onRead = sig.levelsWithheldOnRead;
   if (!e && !noRoom) return null;
   const basis = basisFor(sig);
   const px = basis.price;
@@ -139,6 +178,12 @@ function ExitLevels({ sig }) {
                 .map(k => `${k} ${rupee(withheld[k], 2)}`).join(" · ")} — for inspection, not to act on
             </div>
           )}
+          {/* A record written before the guard existed. The engine withholds
+              its targets on the way out but never rewrites the record, so the
+              percentages it actually sent are still available — behind a tap,
+              labelled as history, because a message that went out months ago
+              is a fact about the past and not a level to trade. */}
+          {onRead && <AsSent onRead={onRead} price={px} />}
         </div>
       )}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{cells}</div>

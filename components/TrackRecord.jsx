@@ -348,6 +348,18 @@ function SignalsView({ signals, trades, onLog, assumptions, stats }) {
                     ? <div style={{ color: T.dim }} title="This record predates the field that says whether a target was rejected or simply absent.">out —</div>
                     : <div style={{ color: T.green }}>out {inr(L.exit, 2)}</div>}
                   <div style={{ color: T.red }}>stop {inr(L.stop, 2)}</div>
+                  {/* The record is evidence and is never rewritten, so this
+                      column keeps showing what went out. But /signals/history
+                      now withholds these same levels as current advice, and a
+                      row that reads like a normal trade would hide that the
+                      engine has since disowned it. */}
+                  {r.levelsWithheldOnRead && (
+                    <div style={{ color: T.amber, fontSize: 8.5 }}
+                      title={r.riskRewardWarning
+                        || `${r.levelsWithheldOnRead.riskReward}:1 against the stop — ${r.levelsWithheldOnRead.why}.`}>
+                      would not be sent today
+                    </div>
+                  )}
                   {L.source && <div style={{ color: T.dim, fontSize: 8.5 }}>{L.source}</div>}
                 </span>
               );
