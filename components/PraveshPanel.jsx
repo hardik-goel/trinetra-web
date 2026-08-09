@@ -11,6 +11,7 @@ import {
   isSufficient,
   istDate as istToday,
   praveshSource,
+  coverageText,
   STANCE_TONE,
 } from "../lib/pravesh";
 
@@ -121,17 +122,27 @@ function VetoBanner({ flags }) {
   );
 }
 
-/* The evidence table IS the product. It comes before My Take, always. */
-function EvidenceTable({ rows }) {
+/* The evidence table IS the product. It comes before My Take, always.
+
+   An empty table has two completely different meanings — "everyone was asked
+   and nobody had a view" and "we could not ask" — and only the engine knows
+   which. `coverage` is that answer, so the empty state is written from it
+   rather than assuming the first. */
+function EvidenceTable({ rows, coverage }) {
+  const text = coverageText(coverage);
   if (!rows?.length) {
     return (
       <div style={{ border: "1px dashed " + T.line, borderRadius: 10, padding: "14px 12px", fontSize: 12, color: T.mute, lineHeight: 1.6 }}>
-        No named source has published a view on this issue yet. That absence is itself information.
+        {text.empty}
       </div>
     );
   }
   return (
     <div style={{ overflowX: "auto" }}>
+      {/* Rows present does not mean the sweep was complete. */}
+      {text.note && (
+        <div style={{ fontSize: 11.5, color: T.amber, lineHeight: 1.55, marginBottom: 8 }}>{text.note}</div>
+      )}
       <table>
         <thead>
           <tr>
@@ -270,7 +281,7 @@ function IPOCard({ ipo, open, onToggle }) {
       {open && (
         <div style={{ marginTop: 14 }}>
           <SectionLabel muted>Evidence — who said what</SectionLabel>
-          <EvidenceTable rows={ipo.evidence} />
+          <EvidenceTable rows={ipo.evidence} coverage={ipo.coverage} />
           <TakeBox take={take} />
           <DetailStrip ipo={ipo} />
           {take?.modifiers?.length > 0 && (
@@ -390,6 +401,46 @@ function HistoryView({ data }) {
   );
 }
 
+/* How much of the last run was actually checked. Kept next to the leaderboard
+   because an accuracy table invites the reading that the sweep was complete;
+   on a rate-limited run most issues can go unchecked and the table looks the
+   same either way. Silent when the feed does not carry the field — an absent
+   block is not a claim of full coverage. */
+function ExpertCoverage({ data }) {
+  const c = data.coverage;
+  if (!c?.tracked) return null;
+  const rows = data.expertCoverage || [];
+  const checked = c.issues - c.unchecked;
+  return (
+    <div style={{ marginTop: 14, background: T.raised, border: "1px solid " + T.line, borderRadius: 10, padding: "12px 14px" }}>
+      <div style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1.6, color: T.dimSolid, marginBottom: 5 }}>
+        EXPERT COVERAGE — LAST RUN
+      </div>
+      <div style={{ fontSize: 12.5, color: T.ink, lineHeight: 1.6 }}>
+        {c.issues} issue{c.issues === 1 ? "" : "s"} · {checked} checked
+        {c.unchecked > 0 && <span style={{ color: T.amber }}>, {c.unchecked} not checked at all</span>}
+        {c.partial > 0 && <span style={{ color: T.amber }}>, {c.partial} partly</span>}.
+      </div>
+      <div style={{ fontSize: 11.5, color: T.dimSolid, lineHeight: 1.6, marginTop: 4 }}>
+        An unchecked issue shows no expert view because nobody could be asked, not because nobody had one.
+      </div>
+      {rows.length > 0 && (
+        <div style={{ marginTop: 8, fontFamily: T.mono, fontSize: 10.5, color: T.mute, lineHeight: 1.7 }}>
+          {rows.map((r) => (
+            <div key={r.expert}>
+              · {r.expert} — {r.calls} call{r.calls === 1 ? "" : "s"} of {r.queried} asked
+              {/* noView minus unreachable is the only part that means "no view". */}
+              {r.noView > 0 && `, ${Math.max(r.noView - r.unreachable, 0)} no view`}
+              {r.unreachable > 0 && <span style={{ color: T.amber }}>, {r.unreachable} unreachable</span>}
+              {r.droppedNoUrl > 0 && `, ${r.droppedNoUrl} dropped (no link)`}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SourcesView({ data }) {
   // Sorting belongs to the table now — every column, not three preset buttons.
   const rows = data.leaderboard || [];
@@ -422,6 +473,8 @@ function SourcesView({ data }) {
               render: r => ((r.n_all || 0) >= 5 && r.accuracy_recent != null ? `${Math.round(r.accuracy_recent)}%` : "—") },
             { key: "n_all", label: "n", type: "number" },
           ]} />
+
+      <ExpertCoverage data={data} />
 
       <div style={{ marginTop: 14, background: T.raised, border: "1px solid " + T.line, borderRadius: 10, padding: "12px 14px" }}>
         <div style={{ fontFamily: T.mono, fontSize: 9, letterSpacing: 1.6, color: T.dimSolid, marginBottom: 5 }}>
