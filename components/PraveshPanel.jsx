@@ -338,7 +338,24 @@ function TodayView({ data, segment, setSegment }) {
         ))}
       </div>
 
-      {ipos.length === 0 ? (
+      {/* Empty has two causes and they mean opposite things. A quiet day is a fact
+          about the market; an unreadable calendar is a fact about the run, and on
+          2026-08-14 this panel showed "All quiet." while two mainboard issues were
+          open and closing that day. Only claim quiet when the engine could actually
+          look — `data.calendarReadable` is false when the calendar answered with no
+          dates on any row. Note this is a RUN-level state, so it is checked before
+          the segment filter: the calendar being unreadable is not a fact about
+          Mainboard or SME. */}
+      {ipos.length === 0 && !data.calendarReadable ? (
+        <div style={{ border: "1px dashed " + T.red, borderRadius: 12, padding: "28px 20px", textAlign: "center", marginTop: 22 }}>
+          <div style={{ fontSize: 13, color: T.red }}>Could not read the IPO calendar on this run.</div>
+          <div style={{ fontSize: 12, color: T.dimSolid, marginTop: 3, lineHeight: 1.5 }}>
+            This is <b>not</b> a quiet day. There may be issues open or closing right now
+            that this run could not see — check the calendar directly before deciding
+            anything.
+          </div>
+        </div>
+      ) : ipos.length === 0 ? (
         <div style={{ border: "1px dashed " + T.line, borderRadius: 12, padding: "28px 20px", textAlign: "center", marginTop: 22 }}>
           <div style={{ fontSize: 13, color: T.mute }}>All quiet.</div>
           <div style={{ fontSize: 12, color: T.dimSolid, marginTop: 3 }}>
