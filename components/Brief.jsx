@@ -129,7 +129,12 @@ function ExitLevels({ sig }) {
   const e = sig.exitLevels;
   const noRoom = noRoomOf(sig);
   const onRead = sig.levelsWithheldOnRead;
-  if (!e && !noRoom) return null;
+  /* Withheld for incoherence — a target or stop that came out on the wrong side
+     of the entry. Not the same as noRoom: nothing was weighed against anything,
+     the number was simply not usable. It stores as nulls with noRoom false, so
+     without this the card renders as an empty payload. */
+  const withheldLevels = sig.levelWarning || sig.levels?.warning || null;
+  if (!e && !noRoom && !withheldLevels) return null;
   const basis = basisFor(sig);
   const px = basis.price;
   const shifted = basis.exact && basisIsShifted(px, sig.price);
@@ -154,7 +159,7 @@ function ExitLevels({ sig }) {
     cell("STRETCH", e?.stretch, T.green),
     cell("STOP", e?.stop, T.red),
   ].filter(Boolean);
-  if (!cells.length && !noRoom) return null;
+  if (!cells.length && !noRoom && !withheldLevels) return null;
 
   /* Same number for all three exits means the methods did not separate them —
      saying so beats printing the same price three times as if it were a ladder. */
@@ -162,6 +167,16 @@ function ExitLevels({ sig }) {
   const withheld = withheldOf(sig);
   return (
     <div style={{ marginTop: 8 }}>
+      {/* Amber, not red: red is the engine saying the trade is not worth taking.
+          This says it could not produce a level it was willing to stand behind,
+          which is a statement about the numbers and not about the setup. */}
+      {withheldLevels && !noRoom && (
+        <div style={{ background: T.amber + "12", border: "1px solid " + T.amber + "55", borderLeft: "3px solid " + T.amber,
+          borderRadius: 8, padding: "8px 11px", marginBottom: 7 }}>
+          <div style={{ fontFamily: T.mono, fontSize: 8.5, letterSpacing: 1.2, color: T.amber, marginBottom: 4 }}>LEVELS WITHHELD</div>
+          <div style={{ fontSize: 11.5, color: T.amber, lineHeight: 1.55 }}>{withheldLevels}</div>
+        </div>
+      )}
       {/* A target was computed and rejected. Rendering only a lone STOP cell
           would read as a partial payload; it is a conclusion. */}
       {noRoom && (

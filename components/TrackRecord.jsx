@@ -340,7 +340,15 @@ function SignalsView({ signals, trades, onLog, assumptions, stats }) {
               return (
                 <span style={{ fontFamily: T.mono, fontSize: 10, lineHeight: 1.5 }} title={L.source ? `levels from ${L.source}` : ""}>
                   <div>in {inr(L.entry, 2)}</div>
-                  {was === "rejected"
+                  {/* A fourth state, and the only one that is neither a target
+                      nor a judgement about one: the level was computed and then
+                      withheld for landing on the wrong side of the entry. It
+                      stores the same nulls as "never computed" with noRoom
+                      false, so without this branch the row reads as an ordinary
+                      alert that happened to carry no target. */}
+                  {L.warning
+                    ? <div style={{ color: T.amber }} title={L.warning}>levels withheld</div>
+                    : was === "rejected"
                     ? <div style={{ color: T.red }} title={L.riskRewardWarning || "A target was computed and rejected; the alert carried a stop and no target."}>
                         no target sent
                       </div>
